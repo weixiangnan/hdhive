@@ -7,7 +7,6 @@
     "icon": "signin.png",
     "author": "weixiangnan",
     "level": 2,
-    "release": true,
     "history": {
       "v1.0.0": "首个版本，支持 HDHive 独立签到插件。"
     }
