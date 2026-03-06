@@ -39,6 +39,7 @@ class HDHiveSignIn(_PluginBase):
     _sign_path: str = ""
     _sign_method: str = "POST"
     _sign_body: str = ""
+    _sign_headers: str = ""
     _success_regex_text: str = ""
     _repeat_regex_text: str = ""
     _scheduler: Optional[BackgroundScheduler] = None
@@ -47,12 +48,15 @@ class HDHiveSignIn(_PluginBase):
         r"今天已经签到",
         r"请不要重复签到",
         r"今日已签到",
+        r"你已经签到过了",
+        r"明天再来吧",
     ]
     _success_regex = [
         r"签到成功",
         r"本次签到获得",
         r"此次签到您获得",
         r"获得了?\d+.*?(魔力|积分|bonus|上传量)",
+        r"\"success\":true",
     ]
 
     def init_plugin(self, config: dict = None):
@@ -71,6 +75,7 @@ class HDHiveSignIn(_PluginBase):
             self._sign_path = (config.get("sign_path") or "").strip()
             self._sign_method = (config.get("sign_method") or "POST").strip().upper()
             self._sign_body = (config.get("sign_body") or "").strip()
+            self._sign_headers = (config.get("sign_headers") or "").strip()
             self._success_regex_text = (config.get("success_regex") or "").strip()
             self._repeat_regex_text = (config.get("repeat_regex") or "").strip()
 
@@ -105,6 +110,7 @@ class HDHiveSignIn(_PluginBase):
                 "sign_path": self._sign_path,
                 "sign_method": self._sign_method,
                 "sign_body": self._sign_body,
+                "sign_headers": self._sign_headers,
                 "success_regex": self._success_regex_text,
                 "repeat_regex": self._repeat_regex_text,
             }
@@ -177,6 +183,24 @@ class HDHiveSignIn(_PluginBase):
                                     "props": {
                                         "model": "notify",
                                         "label": "发送通知"
+                                    }
+                                }]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [{
+                                    "component": "VTextarea",
+                                    "props": {
+                                        "model": "sign_headers",
+                                        "label": "自定义请求头(JSON)",
+                                        "rows": 4,
+                                        "placeholder": "{\"Accept\":\"text/x-component\",\"next-action\":\"...\"}"
                                     }
                                 }]
                             }
@@ -368,7 +392,7 @@ class HDHiveSignIn(_PluginBase):
                                     "props": {
                                         "type": "info",
                                         "variant": "tonal",
-                                        "text": "这是独立插件，不依赖 AutoSignIn。建议先填 Cookie 和 User-Agent，再打开立即运行一次验证。"
+                                        "text": "HDHive 当前签到走前端 Server Action。默认会尝试 POST /tv + [false]；如失败，请把浏览器抓到的 next-action 等请求头填入自定义请求头。"
                                     }
                                 }]
                             }
@@ -389,6 +413,7 @@ class HDHiveSignIn(_PluginBase):
             "sign_path": "",
             "sign_method": "POST",
             "sign_body": "",
+            "sign_headers": "",
             "success_regex": "",
             "repeat_regex": ""
         }
@@ -483,6 +508,12 @@ class HDHiveSignIn(_PluginBase):
                 self.__join_url(site_url, self._sign_path),
                 self.__parse_sign_body(),
             ))
+        else:
+            candidates.append((
+                "post",
+                f"{site_url}tv",
+                [False],
+            ))
         candidates.extend([
             ("post", f"{site_url}signin.php", {"action": "post", "content": ""}),
             ("post", f"{site_url}sign_in.php", {"action": "sign_in"}),
@@ -508,16 +539,21 @@ class HDHiveSignIn(_PluginBase):
         self.__save_history(False, message)
         return False, message
 
-    def __try_sign(self, url: str, method: str, data: Optional[Dict]) -> Tuple[bool, str]:
+    def __try_sign(self, url: str, method: str, data: Any) -> Tuple[bool, str]:
         try:
+            headers = self.__request_headers()
             req = RequestUtils(
                 cookies=self._cookie,
                 ua=self._ua,
+                headers=headers,
                 proxies=settings.PROXY if self._proxy else None,
                 timeout=self._timeout,
             )
             if method == "post":
-                res = req.post_res(url=url, data=data)
+                if isinstance(data, list):
+                    res = req.post_res(url=url, data=json.dumps(data))
+                else:
+                    res = req.post_res(url=url, data=data)
             else:
                 res = req.get_res(url=url)
 
@@ -553,6 +589,7 @@ class HDHiveSignIn(_PluginBase):
         res = RequestUtils(
             cookies=self._cookie,
             ua=self._ua,
+            headers=self.__request_headers(),
             proxies=settings.PROXY if self._proxy else None,
             timeout=self._timeout,
         ).get_res(url=url)
@@ -594,10 +631,17 @@ class HDHiveSignIn(_PluginBase):
             return sign_path
         return site_url.rstrip("/") + "/" + sign_path.lstrip("/")
 
-    def __parse_sign_body(self) -> Optional[Dict]:
+    def __parse_sign_body(self) -> Any:
         if not self._sign_body:
             return None
+        if self._sign_body in ["[false]", "[False]"]:
+            return [False]
         if self._sign_body.startswith("{") and self._sign_body.endswith("}"):
+            try:
+                return json.loads(self._sign_body)
+            except Exception:
+                return None
+        if self._sign_body.startswith("[") and self._sign_body.endswith("]"):
             try:
                 return json.loads(self._sign_body)
             except Exception:
@@ -609,6 +653,17 @@ class HDHiveSignIn(_PluginBase):
             key, value = item.split("=", 1)
             data[key] = value
         return data or None
+
+    def __request_headers(self) -> Dict[str, str]:
+        headers = {}
+        if self._sign_headers.startswith("{") and self._sign_headers.endswith("}"):
+            try:
+                payload = json.loads(self._sign_headers)
+                if isinstance(payload, dict):
+                    headers.update({str(key): str(value) for key, value in payload.items()})
+            except Exception:
+                logger.error("HDHive 自定义请求头不是合法 JSON，已忽略")
+        return headers
 
     @staticmethod
     def __json_is_success(payload: Dict) -> bool:
