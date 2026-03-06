@@ -565,6 +565,9 @@ class HDHiveSignIn(_PluginBase):
                 return False, ""
             if self.__is_login_page(text):
                 return False, "签到失败，Cookie已失效"
+            server_action_result = self.__parse_server_action_result(text)
+            if server_action_result:
+                return server_action_result
             if text.startswith("{") and text.endswith("}"):
                 try:
                     payload = json.loads(text)
@@ -678,6 +681,61 @@ class HDHiveSignIn(_PluginBase):
             if isinstance(value, str) and value.lower() in ["ok", "success", "true", "1"]:
                 return True
         return False
+
+    def __parse_server_action_result(self, text: str) -> Optional[Tuple[bool, str]]:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or ":{" not in line:
+                continue
+            _, json_part = line.split(":", 1)
+            try:
+                payload = json.loads(json_part)
+            except Exception:
+                continue
+
+            error = payload.get("error")
+            if isinstance(error, dict):
+                description = str(error.get("description") or "")
+                message = str(error.get("message") or "")
+                code = str(error.get("code") or "")
+                merged = f"{message} {description} {code}"
+                if self.__looks_like_repeat_message(merged):
+                    logger.info("HDHive 今日已签到")
+                    return True, "今日已签到"
+                if self.__looks_like_success_message(merged):
+                    logger.info("HDHive 签到成功")
+                    return True, "签到成功"
+
+            if self.__json_is_success(payload):
+                logger.info("HDHive 签到成功")
+                return True, "签到成功"
+        return None
+
+    @staticmethod
+    def __looks_like_repeat_message(text: str) -> bool:
+        lowered = (text or "").lower()
+        return any(token in lowered for token in [
+            "已经签到",
+            "今日已签到",
+            "明天再来",
+            "already signed",
+            "already checked",
+            "code 400",
+            "\"code\":\"400\"",
+            "success\":false",
+            "ç­¾å°å¤±è´¥",
+            "ä½ å·²ç»ç­¾å°è¿äº",
+        ])
+
+    @staticmethod
+    def __looks_like_success_message(text: str) -> bool:
+        lowered = (text or "").lower()
+        return any(token in lowered for token in [
+            "签到成功",
+            "sign success",
+            "checkin success",
+            "\"success\":true",
+        ])
 
     @staticmethod
     def __match_regex(text: str, patterns: List[str]) -> bool:
