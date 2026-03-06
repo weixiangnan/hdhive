@@ -20,7 +20,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.10"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -31,6 +31,9 @@ class HDHiveSignIn(_PluginBase):
     _onlyonce: bool = False
     _notify: bool = False
     _cron: str = ""
+    _run_hour: int = 8
+    _run_minute: int = 0
+    _custom_cron: str = ""
     _cookie: str = ""
     _ua: str = ""
     _proxy: bool = False
@@ -66,7 +69,10 @@ class HDHiveSignIn(_PluginBase):
             self._enabled = bool(config.get("enabled"))
             self._onlyonce = bool(config.get("onlyonce"))
             self._notify = bool(config.get("notify"))
-            self._cron = config.get("cron") or ""
+            self._run_hour = int(config.get("run_hour") or 8)
+            self._run_minute = int(config.get("run_minute") or 0)
+            self._custom_cron = (config.get("custom_cron") or "").strip()
+            legacy_cron = (config.get("cron") or "").strip()
             self._cookie = (config.get("cookie") or "").strip()
             self._ua = (config.get("ua") or "").strip()
             self._proxy = bool(config.get("proxy"))
@@ -78,6 +84,7 @@ class HDHiveSignIn(_PluginBase):
             self._sign_headers = (config.get("sign_headers") or "").strip()
             self._success_regex_text = (config.get("success_regex") or "").strip()
             self._repeat_regex_text = (config.get("repeat_regex") or "").strip()
+            self._load_schedule_config(legacy_cron=legacy_cron)
 
         if self._onlyonce:
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
@@ -96,12 +103,16 @@ class HDHiveSignIn(_PluginBase):
         return self._enabled
 
     def __update_config(self):
+        self._cron = self.__build_cron()
         self.update_config(
             {
                 "enabled": self._enabled,
                 "onlyonce": self._onlyonce,
                 "notify": self._notify,
                 "cron": self._cron,
+                "run_hour": self._run_hour,
+                "run_minute": self._run_minute,
+                "custom_cron": self._custom_cron,
                 "cookie": self._cookie,
                 "ua": self._ua,
                 "proxy": self._proxy,
@@ -132,6 +143,7 @@ class HDHiveSignIn(_PluginBase):
         return []
 
     def get_service(self) -> List[Dict[str, Any]]:
+        self._cron = self.__build_cron()
         if self._enabled and self._cron:
             try:
                 return [{
@@ -241,13 +253,63 @@ class HDHiveSignIn(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 8},
+                                "props": {"cols": 12, "md": 4},
                                 "content": [{
-                                    "component": "VCronField",
+                                    "component": "VSelect",
                                     "props": {
-                                        "model": "cron",
-                                        "label": "定时执行周期",
-                                        "placeholder": "5位 cron 表达式，留空则仅手动执行"
+                                        "model": "run_hour",
+                                        "label": "每日执行小时",
+                                        "items": [
+                                            {"title": "00", "value": 0},
+                                            {"title": "01", "value": 1},
+                                            {"title": "02", "value": 2},
+                                            {"title": "03", "value": 3},
+                                            {"title": "04", "value": 4},
+                                            {"title": "05", "value": 5},
+                                            {"title": "06", "value": 6},
+                                            {"title": "07", "value": 7},
+                                            {"title": "08", "value": 8},
+                                            {"title": "09", "value": 9},
+                                            {"title": "10", "value": 10},
+                                            {"title": "11", "value": 11},
+                                            {"title": "12", "value": 12},
+                                            {"title": "13", "value": 13},
+                                            {"title": "14", "value": 14},
+                                            {"title": "15", "value": 15},
+                                            {"title": "16", "value": 16},
+                                            {"title": "17", "value": 17},
+                                            {"title": "18", "value": 18},
+                                            {"title": "19", "value": 19},
+                                            {"title": "20", "value": 20},
+                                            {"title": "21", "value": 21},
+                                            {"title": "22", "value": 22},
+                                            {"title": "23", "value": 23}
+                                        ]
+                                    }
+                                }]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [{
+                                    "component": "VSelect",
+                                    "props": {
+                                        "model": "run_minute",
+                                        "label": "每日执行分钟",
+                                        "items": [
+                                            {"title": "00", "value": 0},
+                                            {"title": "05", "value": 5},
+                                            {"title": "10", "value": 10},
+                                            {"title": "15", "value": 15},
+                                            {"title": "20", "value": 20},
+                                            {"title": "25", "value": 25},
+                                            {"title": "30", "value": 30},
+                                            {"title": "35", "value": 35},
+                                            {"title": "40", "value": 40},
+                                            {"title": "45", "value": 45},
+                                            {"title": "50", "value": 50},
+                                            {"title": "55", "value": 55}
+                                        ]
                                     }
                                 }]
                             },
@@ -259,6 +321,23 @@ class HDHiveSignIn(_PluginBase):
                                     "props": {
                                         "model": "proxy",
                                         "label": "使用代理"
+                                    }
+                                }]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "custom_cron",
+                                        "label": "高级 cron 覆盖",
+                                        "placeholder": "留空则按上方每日时间生成，例如 0 8 * * *"
                                     }
                                 }]
                             }
@@ -392,7 +471,7 @@ class HDHiveSignIn(_PluginBase):
                                     "props": {
                                         "type": "info",
                                         "variant": "tonal",
-                                        "text": "HDHive 当前签到走前端 Server Action。默认会尝试 POST /tv + [false]；如失败，请把浏览器抓到的 next-action 等请求头填入自定义请求头。"
+                                        "text": "默认按“每日执行小时/分钟”生成计划，例如 08:00 会生成 0 8 * * *。只有需要复杂计划时才填写高级 cron 覆盖。HDHive 当前签到走前端 Server Action，默认会尝试 POST /tv + [false]；如失败，请把浏览器抓到的 next-action 等请求头填入自定义请求头。"
                                     }
                                 }]
                             }
@@ -404,7 +483,10 @@ class HDHiveSignIn(_PluginBase):
             "enabled": False,
             "onlyonce": False,
             "notify": False,
-            "cron": "",
+            "cron": "0 8 * * *",
+            "run_hour": 8,
+            "run_minute": 0,
+            "custom_cron": "",
             "cookie": "",
             "ua": "",
             "proxy": False,
@@ -667,6 +749,28 @@ class HDHiveSignIn(_PluginBase):
             except Exception:
                 logger.error("HDHive 自定义请求头不是合法 JSON，已忽略")
         return headers
+
+    def _load_schedule_config(self, legacy_cron: str = ""):
+        if self._custom_cron:
+            self._cron = self._custom_cron
+            return
+        if legacy_cron and not self._custom_cron:
+            parts = legacy_cron.split()
+            if len(parts) == 5 and parts[2:] == ["*", "*", "*"] and parts[0].isdigit() and parts[1].isdigit():
+                self._run_minute = int(parts[0])
+                self._run_hour = int(parts[1])
+            elif legacy_cron:
+                self._custom_cron = legacy_cron
+                self._cron = legacy_cron
+                return
+        self._cron = self.__build_cron()
+
+    def __build_cron(self) -> str:
+        if self._custom_cron:
+            return self._custom_cron
+        hour = min(max(int(self._run_hour), 0), 23)
+        minute = min(max(int(self._run_minute), 0), 59)
+        return f"{minute} {hour} * * *"
 
     @staticmethod
     def __json_is_success(payload: Dict) -> bool:
