@@ -36,6 +36,11 @@ class HDHiveSignIn(_PluginBase):
     _proxy: bool = False
     _timeout: int = 20
     _site_url: str = "https://hdhive.com/"
+    _sign_path: str = ""
+    _sign_method: str = "POST"
+    _sign_body: str = ""
+    _success_regex_text: str = ""
+    _repeat_regex_text: str = ""
     _scheduler: Optional[BackgroundScheduler] = None
 
     _repeat_regex = [
@@ -63,6 +68,11 @@ class HDHiveSignIn(_PluginBase):
             self._proxy = bool(config.get("proxy"))
             self._site_url = (config.get("site_url") or "https://hdhive.com/").strip()
             self._timeout = int(config.get("timeout") or 20)
+            self._sign_path = (config.get("sign_path") or "").strip()
+            self._sign_method = (config.get("sign_method") or "POST").strip().upper()
+            self._sign_body = (config.get("sign_body") or "").strip()
+            self._success_regex_text = (config.get("success_regex") or "").strip()
+            self._repeat_regex_text = (config.get("repeat_regex") or "").strip()
 
         if self._onlyonce:
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
@@ -92,6 +102,11 @@ class HDHiveSignIn(_PluginBase):
                 "proxy": self._proxy,
                 "timeout": self._timeout,
                 "site_url": self._site_url,
+                "sign_path": self._sign_path,
+                "sign_method": self._sign_method,
+                "sign_body": self._sign_body,
+                "success_regex": self._success_regex_text,
+                "repeat_regex": self._repeat_regex_text,
             }
         )
 
@@ -230,6 +245,87 @@ class HDHiveSignIn(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
+                                "props": {"cols": 12, "md": 8},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "sign_path",
+                                        "label": "自定义签到路径",
+                                        "placeholder": "/api/xxx 或完整 https:// 链接；留空则按内置候选尝试"
+                                    }
+                                }]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [{
+                                    "component": "VSelect",
+                                    "props": {
+                                        "model": "sign_method",
+                                        "label": "签到请求方法",
+                                        "items": [
+                                            {"title": "POST", "value": "POST"},
+                                            {"title": "GET", "value": "GET"}
+                                        ]
+                                    }
+                                }]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [{
+                                    "component": "VTextarea",
+                                    "props": {
+                                        "model": "sign_body",
+                                        "label": "自定义请求体(JSON 或 key=value&key2=value2)",
+                                        "rows": 3,
+                                        "placeholder": "{\"action\":\"checkin\"}"
+                                    }
+                                }]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [{
+                                    "component": "VTextarea",
+                                    "props": {
+                                        "model": "success_regex",
+                                        "label": "成功关键词/正则",
+                                        "rows": 3,
+                                        "placeholder": "每行一个，留空使用内置规则"
+                                    }
+                                }]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [{
+                                    "component": "VTextarea",
+                                    "props": {
+                                        "model": "repeat_regex",
+                                        "label": "已签到关键词/正则",
+                                        "rows": 3,
+                                        "placeholder": "每行一个，留空使用内置规则"
+                                    }
+                                }]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
                                 "props": {"cols": 12},
                                 "content": [{
                                     "component": "VTextarea",
@@ -289,7 +385,12 @@ class HDHiveSignIn(_PluginBase):
             "ua": "",
             "proxy": False,
             "timeout": 20,
-            "site_url": "https://hdhive.com/"
+            "site_url": "https://hdhive.com/",
+            "sign_path": "",
+            "sign_method": "POST",
+            "sign_body": "",
+            "success_regex": "",
+            "repeat_regex": ""
         }
 
     def get_page(self) -> List[dict]:
@@ -363,24 +464,31 @@ class HDHiveSignIn(_PluginBase):
             self.__save_history(False, message)
             return False, message
 
-        if "login.php" in home_html or "name=\"username\"" in home_html:
+        if self.__is_login_page(home_html):
             message = "签到失败，Cookie已失效"
             logger.error(message)
             self.__save_history(False, message)
             return False, message
 
-        if self.__match_regex(home_html, self._repeat_regex):
+        if self.__match_regex(home_html, self.__repeat_patterns()):
             message = "今日已签到"
             logger.info(message)
             self.__save_history(True, message)
             return True, message
 
-        candidates = [
+        candidates = []
+        if self._sign_path:
+            candidates.append((
+                self._sign_method.lower(),
+                self.__join_url(site_url, self._sign_path),
+                self.__parse_sign_body(),
+            ))
+        candidates.extend([
             ("post", f"{site_url}signin.php", {"action": "post", "content": ""}),
             ("post", f"{site_url}sign_in.php", {"action": "sign_in"}),
             ("get", f"{site_url}attendance.php", None),
             ("get", f"{site_url}plugin_sign-in.php?cmd=signin", None),
-        ]
+        ])
         last_detail = ""
         for method, url, data in candidates:
             ok, message = self.__try_sign(url=url, method=method, data=data)
@@ -419,7 +527,7 @@ class HDHiveSignIn(_PluginBase):
             text = (res.text or "").strip()
             if not text:
                 return False, ""
-            if "login.php" in text or "name=\"username\"" in text:
+            if self.__is_login_page(text):
                 return False, "签到失败，Cookie已失效"
             if text.startswith("{") and text.endswith("}"):
                 try:
@@ -429,13 +537,14 @@ class HDHiveSignIn(_PluginBase):
                         return True, "签到成功"
                 except Exception:
                     pass
-            if self.__match_regex(text, self._repeat_regex):
+            if self.__match_regex(text, self.__repeat_patterns()):
                 logger.info(f"HDHive 今日已签到，接口：{url}")
                 return True, "今日已签到"
-            if self.__match_regex(text, self._success_regex):
+            if self.__match_regex(text, self.__success_patterns()):
                 logger.info(f"HDHive 签到成功，接口：{url}")
                 return True, "签到成功"
-            return False, text[:120]
+            snippet = re.sub(r"\s+", " ", text)[:200]
+            return False, f"接口 {url} 返回：{snippet}"
         except Exception as err:
             logger.error(f"HDHive 请求签到接口异常：{url}，原因：{str(err)}")
             return False, str(err)
@@ -459,6 +568,47 @@ class HDHiveSignIn(_PluginBase):
             "message": message,
         })
         self.save_data("history", history[:20])
+
+    def __success_patterns(self) -> List[str]:
+        if self._success_regex_text:
+            return [line.strip() for line in self._success_regex_text.splitlines() if line.strip()]
+        return self._success_regex
+
+    def __repeat_patterns(self) -> List[str]:
+        if self._repeat_regex_text:
+            return [line.strip() for line in self._repeat_regex_text.splitlines() if line.strip()]
+        return self._repeat_regex
+
+    @staticmethod
+    def __is_login_page(text: str) -> bool:
+        return any(marker in (text or "") for marker in [
+            "login.php",
+            "name=\"username\"",
+            "NEXT_REDIRECT;replace;/login",
+            "/login?redirect=",
+        ])
+
+    @staticmethod
+    def __join_url(site_url: str, sign_path: str) -> str:
+        if sign_path.startswith("http://") or sign_path.startswith("https://"):
+            return sign_path
+        return site_url.rstrip("/") + "/" + sign_path.lstrip("/")
+
+    def __parse_sign_body(self) -> Optional[Dict]:
+        if not self._sign_body:
+            return None
+        if self._sign_body.startswith("{") and self._sign_body.endswith("}"):
+            try:
+                return json.loads(self._sign_body)
+            except Exception:
+                return None
+        data = {}
+        for item in self._sign_body.split("&"):
+            if not item or "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            data[key] = value
+        return data or None
 
     @staticmethod
     def __json_is_success(payload: Dict) -> bool:
