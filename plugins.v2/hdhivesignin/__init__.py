@@ -773,7 +773,8 @@ class HDHiveSignIn(_PluginBase):
         return "post", page_url, [False], dynamic_headers
 
     def __extract_server_action_id(self, html: str, site_url: str, action_name: str) -> Optional[str]:
-        chunk_paths = sorted(set(re.findall(r'/_next/static/chunks/[^"\\s]+\\.js', html or "")))
+        chunk_paths = sorted(set(re.findall(r'/_next/static/chunks/[^"\s]+\.js', html or "")))
+        logger.info(f"HDHive 动态提取发现 chunk 数量: {len(chunk_paths)}")
         action_pattern = re.compile(
             rf'createServerReference\)?\("([0-9a-f]+)".*?"{re.escape(action_name)}"\)',
             re.IGNORECASE | re.DOTALL,
@@ -786,6 +787,8 @@ class HDHiveSignIn(_PluginBase):
             matched = action_pattern.search(chunk_js)
             if matched:
                 return matched.group(1)
+        if chunk_paths:
+            logger.warning(f"HDHive 未在 chunk 中匹配到 {action_name}，首个 chunk: {chunk_paths[0]}")
         return None
 
     def __fetch_text(self, url: str) -> str:
