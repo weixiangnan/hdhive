@@ -1,6 +1,7 @@
 import json
 import re
 import time
+import urllib.parse
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -61,6 +62,7 @@ class HDHiveSignIn(_PluginBase):
         r"获得了?\d+.*?(魔力|积分|bonus|上传量)",
         r"\"success\":true",
     ]
+    _default_sign_page = "tv"
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -584,27 +586,27 @@ class HDHiveSignIn(_PluginBase):
             return True, message
 
         candidates = []
+        discovered_candidate = self.__discover_signin_candidate(site_url)
+        if discovered_candidate:
+            candidates.append(discovered_candidate)
+
         if self._sign_path:
             candidates.append((
                 self._sign_method.lower(),
                 self.__join_url(site_url, self._sign_path),
                 self.__parse_sign_body(),
-            ))
-        else:
-            candidates.append((
-                "post",
-                f"{site_url}tv",
-                [False],
+                self.__request_headers(),
             ))
         candidates.extend([
-            ("post", f"{site_url}signin.php", {"action": "post", "content": ""}),
-            ("post", f"{site_url}sign_in.php", {"action": "sign_in"}),
-            ("get", f"{site_url}attendance.php", None),
-            ("get", f"{site_url}plugin_sign-in.php?cmd=signin", None),
+            ("post", f"{site_url}tv", [False], self.__request_headers()),
+            ("post", f"{site_url}signin.php", {"action": "post", "content": ""}, self.__request_headers()),
+            ("post", f"{site_url}sign_in.php", {"action": "sign_in"}, self.__request_headers()),
+            ("get", f"{site_url}attendance.php", None, self.__request_headers()),
+            ("get", f"{site_url}plugin_sign-in.php?cmd=signin", None, self.__request_headers()),
         ])
         last_detail = ""
-        for method, url, data in candidates:
-            ok, message = self.__try_sign(url=url, method=method, data=data)
+        for method, url, data, headers in candidates:
+            ok, message = self.__try_sign(url=url, method=method, data=data, headers=headers)
             if ok:
                 self.__save_history(True, message)
                 return True, message
@@ -621,13 +623,12 @@ class HDHiveSignIn(_PluginBase):
         self.__save_history(False, message)
         return False, message
 
-    def __try_sign(self, url: str, method: str, data: Any) -> Tuple[bool, str]:
+    def __try_sign(self, url: str, method: str, data: Any, headers: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
         try:
-            headers = self.__request_headers()
             req = RequestUtils(
                 cookies=self._cookie,
                 ua=self._ua,
-                headers=headers,
+                headers=headers or {},
                 proxies=settings.PROXY if self._proxy else None,
                 timeout=self._timeout,
             )
@@ -749,6 +750,85 @@ class HDHiveSignIn(_PluginBase):
             except Exception:
                 logger.error("HDHive 自定义请求头不是合法 JSON，已忽略")
         return headers
+
+    def __discover_signin_candidate(self, site_url: str) -> Optional[Tuple[str, str, Any, Dict[str, str]]]:
+        page_name = self._default_sign_page
+        page_url = self.__join_url(site_url, page_name)
+        html = self.__get_page_source(page_url)
+        if not html or self.__is_login_page(html):
+            return None
+
+        action_id = self.__extract_server_action_id(html, site_url, action_name="checkIn")
+        if not action_id:
+            logger.warning("HDHive 动态提取 checkIn action 失败，将回退到静态候选接口")
+            return None
+
+        dynamic_headers = {
+            "Accept": "text/x-component",
+            "Content-Type": "text/plain;charset=UTF-8",
+            "next-action": action_id,
+            "next-router-state-tree": self.__build_next_router_state_tree(page_name),
+        }
+        dynamic_headers.update(self.__request_headers())
+        logger.info(f"HDHive 已动态提取 checkIn action: {action_id[:12]}...")
+        return "post", page_url, [False], dynamic_headers
+
+    def __extract_server_action_id(self, html: str, site_url: str, action_name: str) -> Optional[str]:
+        chunk_paths = sorted(set(re.findall(r'/_next/static/chunks/[^"\\s]+\\.js', html or "")))
+        action_pattern = re.compile(
+            rf'createServerReference\\("([0-9a-f]+)".*?"{re.escape(action_name)}"\\)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        for chunk_path in chunk_paths:
+            chunk_url = self.__join_url(site_url, chunk_path)
+            chunk_js = self.__fetch_text(chunk_url)
+            if not chunk_js:
+                continue
+            matched = action_pattern.search(chunk_js)
+            if matched:
+                return matched.group(1)
+        return None
+
+    def __fetch_text(self, url: str) -> str:
+        try:
+            res = RequestUtils(
+                cookies=self._cookie,
+                ua=self._ua,
+                proxies=settings.PROXY if self._proxy else None,
+                timeout=self._timeout,
+            ).get_res(url=url)
+            if not res:
+                return ""
+            return res.text or ""
+        except Exception as err:
+            logger.warning(f"HDHive 获取页面资源失败：{url}，原因：{str(err)}")
+            return ""
+
+    @staticmethod
+    def __build_next_router_state_tree(page_name: str) -> str:
+        tree = [
+            "",
+            {
+                "children": [
+                    "(app)",
+                    {
+                        "children": [
+                            page_name,
+                            {
+                                "children": [
+                                    "__PAGE__",
+                                    {},
+                                ]
+                            },
+                        ]
+                    },
+                ]
+            },
+            None,
+            None,
+            True,
+        ]
+        return urllib.parse.quote(json.dumps(tree, separators=(",", ":")))
 
     def _load_schedule_config(self, legacy_cron: str = ""):
         if self._custom_cron:
