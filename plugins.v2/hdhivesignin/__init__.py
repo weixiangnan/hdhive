@@ -776,7 +776,7 @@ class HDHiveSignIn(_PluginBase):
     def __extract_server_action_id(self, html: str, site_url: str, action_name: str) -> Optional[str]:
         chunk_paths = sorted(set(re.findall(r'/_next/static/chunks/[^"\\s]+\\.js', html or "")))
         action_pattern = re.compile(
-            rf'createServerReference\\("([0-9a-f]+)".*?"{re.escape(action_name)}"\\)',
+            rf'createServerReference\)?\("([0-9a-f]+)".*?"{re.escape(action_name)}"\)',
             re.IGNORECASE | re.DOTALL,
         )
         for chunk_path in chunk_paths:
