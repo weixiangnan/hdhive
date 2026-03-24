@@ -675,7 +675,6 @@ class HDHiveSignIn(_PluginBase):
         res = RequestUtils(
             cookies=self._cookie,
             ua=self._ua,
-            headers=self.__request_headers(),
             proxies=settings.PROXY if self._proxy else None,
             timeout=self._timeout,
         ).get_res(url=url)
