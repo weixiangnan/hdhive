@@ -22,7 +22,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -521,21 +521,14 @@ class HostLocSignIn(_PluginBase):
             return False, message
 
         site_url = self._site_url.rstrip("/") + "/"
-        home_html, ensure_message = self.__ensure_cookie(site_url)
-        if not home_html:
+        home_html, credit_log_before, ensure_message = self.__ensure_cookie(site_url)
+        if not home_html or not credit_log_before:
             message = ensure_message or "签到失败，请检查站点连通性"
             logger.error(message)
             self.__save_history(False, message)
             return False, message
 
         before_score = self.__query_score(site_url)
-        credit_log_before = self.__get_page_source(self.__join_url(site_url, self._credit_log_url))
-        if not credit_log_before:
-            message = "签到失败，无法读取 HostLoc 积分日志"
-            logger.error(message)
-            self.__save_history(False, message)
-            return False, message
-
         daily_login_done_before = self.__parse_rule_count(credit_log_before, self._daily_login_rid) > 0
         visit_done_before = self.__parse_rule_count(credit_log_before, self._visit_space_rid)
         visit_target = min(max(self._visit_count, 1), 10)
@@ -559,7 +552,7 @@ class HostLocSignIn(_PluginBase):
                     visited_ok += 1
                     time.sleep(1)
 
-        credit_log_after = self.__get_page_source(self.__join_url(site_url, self._credit_log_url))
+        credit_log_after = self.__get_authenticated_credit_log(site_url)
         after_score = self.__query_score(site_url)
         daily_login_done_after = self.__parse_rule_count(credit_log_after, self._daily_login_rid) > 0
         visit_done_after = self.__parse_rule_count(credit_log_after, self._visit_space_rid)
@@ -586,36 +579,43 @@ class HostLocSignIn(_PluginBase):
             return True, message
 
         daily_login_before_text = "已完成" if daily_login_done_before else "未完成"
-        message = f"{daily_login_text}（执行前{daily_login_before_text}），{visit_text}，尝试 {attempted} 个空间{score_text}"
+        message = f"{daily_login_text}（执行前{daily_login_before_text}），{visit_text}，页面访问成功 {visited_ok} 个，尝试 {attempted} 个空间{score_text}"
         logger.error(message)
         self.__save_history(False, message)
         return False, message
 
-    def __ensure_cookie(self, site_url: str) -> Tuple[str, str]:
+    def __ensure_cookie(self, site_url: str) -> Tuple[str, str, str]:
         if self._cookie:
-            home_html = self.__get_page_source(site_url)
-            if home_html and not self.__is_login_page(home_html):
-                return home_html, ""
+            credit_html = self.__get_authenticated_credit_log(site_url)
+            if credit_html:
+                home_html = self.__get_page_source(site_url)
+                if home_html:
+                    return home_html, credit_html, ""
 
         if not self._username or not self._password:
             if self._cookie:
-                return "", "签到失败，Cookie已失效，且未配置用户名/密码自动登录"
-            return "", "签到失败，未配置 Cookie，且未配置用户名/密码自动登录"
+                return "", "", "签到失败，Cookie已失效，且未配置用户名/密码自动登录"
+            return "", "", "签到失败，未配置 Cookie，且未配置用户名/密码自动登录"
 
         cookie, message = self.__login_and_get_cookie(site_url)
         if not cookie:
-            return "", message or "签到失败，自动登录失败"
+            return "", "", message or "签到失败，自动登录失败"
 
         self._cookie = cookie
         self.__update_config()
         home_html = self.__get_page_source(site_url)
+        credit_html = self.__get_authenticated_credit_log(site_url)
         if not home_html:
-            return "", "签到失败，自动登录后无法访问站点首页"
-        if not self.__is_logged_in(home_html):
-            credit_html = self.__get_page_source(self.__join_url(site_url, self._credit_log_url))
-            if not self.__is_logged_in(credit_html):
-                return "", "签到失败，自动登录后仍未进入登录状态"
-        return home_html, "自动登录成功"
+            return "", "", "签到失败，自动登录后无法访问站点首页"
+        if not credit_html:
+            return "", "", "签到失败，自动登录后仍未进入登录状态"
+        return home_html, credit_html, "自动登录成功"
+
+    def __get_authenticated_credit_log(self, site_url: str) -> str:
+        html = self.__get_page_source(self.__join_url(site_url, self._credit_log_url))
+        if self.__is_credit_log_page(html):
+            return html
+        return ""
 
     def __login_and_get_cookie(self, site_url: str) -> Tuple[str, str]:
         try:
@@ -820,6 +820,15 @@ class HostLocSignIn(_PluginBase):
             "积分:",
             "home.php?mod=spacecp",
             "member.php?mod=logging&action=logout",
+        ])
+
+    @staticmethod
+    def __is_credit_log_page(text: str) -> bool:
+        content = text or ""
+        return all(marker in content for marker in [
+            "系统奖励",
+            "访问别人空间",
+            "每天登录",
         ])
 
     @staticmethod
