@@ -1,10 +1,12 @@
 import re
 import time
 import urllib.parse
+from random import randint
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
+import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -20,7 +22,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -35,6 +37,8 @@ class HostLocSignIn(_PluginBase):
     _run_minute: int = 0
     _custom_cron: str = ""
     _cookie: str = ""
+    _username: str = ""
+    _password: str = ""
     _ua: str = ""
     _proxy: bool = False
     _timeout: int = 20
@@ -66,6 +70,8 @@ class HostLocSignIn(_PluginBase):
             self._custom_cron = (config.get("custom_cron") or "").strip()
             legacy_cron = (config.get("cron") or "").strip()
             self._cookie = (config.get("cookie") or "").strip()
+            self._username = (config.get("username") or "").strip()
+            self._password = (config.get("password") or "").strip()
             self._ua = (config.get("ua") or "").strip()
             self._proxy = bool(config.get("proxy"))
             self._site_url = (config.get("site_url") or "https://hostloc.com/").strip()
@@ -102,6 +108,8 @@ class HostLocSignIn(_PluginBase):
                 "run_minute": self._run_minute,
                 "custom_cron": self._custom_cron,
                 "cookie": self._cookie,
+                "username": self._username,
+                "password": self._password,
                 "ua": self._ua,
                 "proxy": self._proxy,
                 "timeout": self._timeout,
@@ -146,6 +154,36 @@ class HostLocSignIn(_PluginBase):
             {
                 "component": "VForm",
                 "content": [
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "username",
+                                        "label": "用户名(可选)",
+                                        "placeholder": "填入后可在 Cookie 缺失或失效时自动登录"
+                                    }
+                                }]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "password",
+                                        "label": "密码(可选)",
+                                        "type": "password",
+                                        "placeholder": "填入后可在 Cookie 缺失或失效时自动登录"
+                                    }
+                                }]
+                            }
+                        ]
+                    },
                     {
                         "component": "VRow",
                         "content": [
@@ -362,7 +400,7 @@ class HostLocSignIn(_PluginBase):
                                         "model": "cookie",
                                         "label": "Cookie",
                                         "rows": 6,
-                                        "placeholder": "粘贴浏览器中 HostLoc 登录后的完整 Cookie"
+                                        "placeholder": "粘贴浏览器中 HostLoc 登录后的完整 Cookie；留空时可尝试用户名/密码自动登录"
                                     }
                                 }]
                             }
@@ -397,7 +435,7 @@ class HostLocSignIn(_PluginBase):
                                     "props": {
                                         "type": "info",
                                         "variant": "tonal",
-                                        "text": "HostLoc 当前按“每天登录 + 访问别人空间”累计积分。插件会先打开首页触发每天登录，再自动访问其他用户空间；如自动提取到的空间链接不足，可在上方手动补充。"
+                                        "text": "HostLoc 当前按“每天登录 + 访问别人空间”累计积分。插件会先打开首页触发每天登录，再自动访问其他用户空间；如自动提取到的空间链接不足，可在上方手动补充。MoviePilot 插件不能直接读取浏览器现成 Cookie，但如果填写了用户名和密码，会在 Cookie 缺失或失效时自动登录并回填 Cookie。"
                                     }
                                 }]
                             }
@@ -414,6 +452,8 @@ class HostLocSignIn(_PluginBase):
             "run_minute": 0,
             "custom_cron": "",
             "cookie": "",
+            "username": "",
+            "password": "",
             "ua": "",
             "proxy": False,
             "timeout": 20,
@@ -473,12 +513,6 @@ class HostLocSignIn(_PluginBase):
         return ok, message
 
     def __do_signin(self) -> Tuple[bool, str]:
-        if not self._cookie:
-            message = "签到失败，未配置 Cookie"
-            logger.error(message)
-            self.__save_history(False, message)
-            return False, message
-
         if not self._ua:
             message = "签到失败，未配置 User-Agent"
             logger.error(message)
@@ -486,15 +520,9 @@ class HostLocSignIn(_PluginBase):
             return False, message
 
         site_url = self._site_url.rstrip("/") + "/"
-        home_html = self.__get_page_source(site_url)
+        home_html, ensure_message = self.__ensure_cookie(site_url)
         if not home_html:
-            message = "签到失败，请检查站点连通性"
-            logger.error(message)
-            self.__save_history(False, message)
-            return False, message
-
-        if self.__is_login_page(home_html):
-            message = "签到失败，Cookie已失效"
+            message = ensure_message or "签到失败，请检查站点连通性"
             logger.error(message)
             self.__save_history(False, message)
             return False, message
@@ -557,6 +585,76 @@ class HostLocSignIn(_PluginBase):
         logger.error(message)
         self.__save_history(False, message)
         return False, message
+
+    def __ensure_cookie(self, site_url: str) -> Tuple[str, str]:
+        if self._cookie:
+            home_html = self.__get_page_source(site_url)
+            if home_html and not self.__is_login_page(home_html):
+                return home_html, ""
+
+        if not self._username or not self._password:
+            if self._cookie:
+                return "", "签到失败，Cookie已失效，且未配置用户名/密码自动登录"
+            return "", "签到失败，未配置 Cookie，且未配置用户名/密码自动登录"
+
+        cookie, message = self.__login_and_get_cookie(site_url)
+        if not cookie:
+            return "", message or "签到失败，自动登录失败"
+
+        self._cookie = cookie
+        self.__update_config()
+        home_html = self.__get_page_source(site_url)
+        if not home_html:
+            return "", "签到失败，自动登录后无法访问站点首页"
+        if self.__is_login_page(home_html):
+            return "", "签到失败，自动登录后仍未进入登录状态"
+        return home_html, "自动登录成功"
+
+    def __login_and_get_cookie(self, site_url: str) -> Tuple[str, str]:
+        try:
+            login_url = self.__join_url(site_url, "member.php")
+            session = requests.Session()
+            payload = {
+                "mod": "logging",
+                "action": "login",
+                "loginsubmit": "yes",
+                "infloat": "yes",
+                "lssubmit": "yes",
+                "inajax": "1",
+                "fastloginfield": "username",
+                "username": self._username,
+                "cookietime": str(randint(1234567, 7654321)),
+                "password": self._password,
+                "quickforward": "yes",
+                "handlekey": "ls",
+            }
+            headers = {
+                "User-Agent": self._ua,
+                "Referer": site_url,
+                "Origin": site_url.rstrip("/"),
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            response = session.post(
+                login_url,
+                data=payload,
+                headers=headers,
+                timeout=self._timeout,
+                proxies=settings.PROXY if self._proxy else None,
+            )
+            text = response.text or ""
+            if response.status_code >= 400:
+                return "", f"签到失败，自动登录返回状态码 {response.status_code}"
+            if any(token in text for token in ["登录失败", "密码错误", "登录表单"]):
+                return "", "签到失败，HostLoc 用户名或密码错误"
+
+            cookie = "; ".join(f"{cookie.name}={cookie.value}" for cookie in session.cookies)
+            if not cookie:
+                return "", "签到失败，自动登录未获取到 Cookie"
+            logger.info("HostLoc 自动登录成功，已回填 Cookie")
+            return cookie, "自动登录成功"
+        except Exception as err:
+            logger.error(f"HostLoc 自动登录失败：{str(err)}")
+            return "", f"签到失败，自动登录异常：{str(err)}"
 
     def __collect_space_urls(self, site_url: str, home_html: str) -> List[str]:
         urls = []

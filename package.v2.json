@@ -17,11 +17,12 @@
     "name": "HostLoc 自动签到",
     "description": "独立执行 HostLoc 每天登录和访问别人空间积分任务。",
     "labels": "站点,签到,积分",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "icon": "signin.png",
     "author": "weixiangnan",
     "level": 2,
     "history": {
+      "v1.0.2": "新增用户名/密码自动登录并回填 Cookie，在 Cookie 缺失或失效时自动续登。",
       "v1.0.1": "补充发布版本号，便于 MoviePilot 仓库识别并直接更新插件。",
       "v1.0.0": "首个版本，支持 HostLoc 每天登录和访问别人空间积分任务。"
     }
