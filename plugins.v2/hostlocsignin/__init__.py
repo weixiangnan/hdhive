@@ -22,7 +22,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -571,7 +571,9 @@ class HostLocSignIn(_PluginBase):
 
         score_text = ""
         if before_score is not None and after_score is not None:
-            score_text = f"，积分 {before_score} -> {after_score}"
+            delta = after_score - before_score
+            delta_text = f"+{delta}" if delta >= 0 else str(delta)
+            score_text = f"，积分 {before_score} -> {after_score}（{delta_text}）"
 
         visit_requirement_met = visit_remaining <= 0 or visit_added >= visit_remaining
         ok = daily_login_done and visit_requirement_met
