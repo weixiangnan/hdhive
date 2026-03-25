@@ -21,7 +21,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -660,10 +660,23 @@ class HostLocSignIn(_PluginBase):
             if any(token in text for token in ["登录失败", "密码错误", "登录表单"]):
                 return "", "签到失败，HostLoc 用户名或密码错误"
 
-            cookie = "; ".join(f"{cookie.name}={cookie.value}" for cookie in session.cookies)
+            home_check = session.get(
+                site_url,
+                timeout=self._timeout,
+                proxies=settings.PROXY if self._proxy else None,
+            )
+            cookie_jar = {cookie.name: cookie.value for cookie in session.cookies}
+            auth_cookie = next((name for name in cookie_jar if name.endswith("_auth")), None)
+            saltkey_cookie = next((name for name in cookie_jar if name.endswith("_saltkey")), None)
+            if not auth_cookie or not saltkey_cookie:
+                return "", "签到失败，自动登录未获取到 HostLoc 认证 Cookie"
+            if "访问我的空间" not in (home_check.text or "") and "退出</a>" not in (home_check.text or ""):
+                return "", "签到失败，自动登录后首页仍未显示登录态"
+
+            cookie = "; ".join(f"{name}={value}" for name, value in cookie_jar.items())
             if not cookie:
                 return "", "签到失败，自动登录未获取到 Cookie"
-            logger.info("HostLoc 自动登录成功，已回填 Cookie")
+            logger.info(f"HostLoc 自动登录成功，已回填 Cookie（{auth_cookie}, {saltkey_cookie}）")
             return cookie, "自动登录成功"
         except Exception as err:
             logger.error(f"HostLoc 自动登录失败：{str(err)}")
