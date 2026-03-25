@@ -22,7 +22,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -51,6 +51,7 @@ class HostLocSignIn(_PluginBase):
     _visit_space_rid = 16
     _credit_log_url = "home.php?mod=spacecp&ac=credit&op=log&suboperation=creditrulelog"
     _credit_base_url = "home.php?mod=spacecp&ac=credit&op=base"
+    _space_fallback_span = 60
     _extra_discovery_paths = [
         "",
         "forum.php?mod=guide&view=new",
@@ -535,7 +536,7 @@ class HostLocSignIn(_PluginBase):
             self.__save_history(False, message)
             return False, message
 
-        daily_login_done = self.__parse_rule_count(credit_log_before, self._daily_login_rid) > 0
+        daily_login_done_before = self.__parse_rule_count(credit_log_before, self._daily_login_rid) > 0
         visit_done_before = self.__parse_rule_count(credit_log_before, self._visit_space_rid)
         visit_target = min(max(self._visit_count, 1), 10)
         visit_remaining = max(0, visit_target - visit_done_before)
@@ -560,10 +561,11 @@ class HostLocSignIn(_PluginBase):
 
         credit_log_after = self.__get_page_source(self.__join_url(site_url, self._credit_log_url))
         after_score = self.__query_score(site_url)
+        daily_login_done_after = self.__parse_rule_count(credit_log_after, self._daily_login_rid) > 0
         visit_done_after = self.__parse_rule_count(credit_log_after, self._visit_space_rid)
         visit_added = max(0, visit_done_after - visit_done_before)
 
-        daily_login_text = "每天登录已完成" if daily_login_done else "每天登录未确认"
+        daily_login_text = "每天登录已完成" if daily_login_done_after else "每天登录未确认"
         if visit_remaining <= 0:
             visit_text = f"访问空间已完成({visit_done_before}/{visit_target})"
         else:
@@ -576,14 +578,15 @@ class HostLocSignIn(_PluginBase):
             score_text = f"，积分 {before_score} -> {after_score}（{delta_text}）"
 
         visit_requirement_met = visit_remaining <= 0 or visit_added >= visit_remaining
-        ok = daily_login_done and visit_requirement_met
+        ok = daily_login_done_after and visit_requirement_met
         if ok:
             message = f"{daily_login_text}，{visit_text}{score_text}"
             logger.info(message)
             self.__save_history(True, message)
             return True, message
 
-        message = f"{daily_login_text}，{visit_text}，尝试 {attempted} 个空间{score_text}"
+        daily_login_before_text = "已完成" if daily_login_done_before else "未完成"
+        message = f"{daily_login_text}（执行前{daily_login_before_text}），{visit_text}，尝试 {attempted} 个空间{score_text}"
         logger.error(message)
         self.__save_history(False, message)
         return False, message
@@ -693,6 +696,18 @@ class HostLocSignIn(_PluginBase):
                 add(url)
             if len(urls) >= self._visit_count + 5:
                 break
+
+        if own_uid:
+            try:
+                uid = int(own_uid)
+                for offset in range(1, self._space_fallback_span + 1):
+                    add(f"{site_url}space-uid-{uid + offset}.html")
+                    if uid - offset > 0:
+                        add(f"{site_url}space-uid-{uid - offset}.html")
+                    if len(urls) >= self._visit_count * 3:
+                        break
+            except Exception:
+                pass
 
         return urls
 
