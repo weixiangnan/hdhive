@@ -21,7 +21,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.10"
+    plugin_version = "1.11"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -62,7 +62,7 @@ class HDHiveSignIn(_PluginBase):
         r"获得了?\d+.*?(魔力|积分|bonus|上传量)",
         r"\"success\":true",
     ]
-    _default_sign_page = "tv"
+    _default_sign_pages = ["", "tv"]
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -586,9 +586,7 @@ class HDHiveSignIn(_PluginBase):
             return True, message
 
         candidates = []
-        discovered_candidate = self.__discover_signin_candidate(site_url)
-        if discovered_candidate:
-            candidates.append(discovered_candidate)
+        candidates.extend(self.__discover_signin_candidates(site_url))
 
         if self._sign_path:
             candidates.append((
@@ -750,27 +748,35 @@ class HDHiveSignIn(_PluginBase):
                 logger.error("HDHive 自定义请求头不是合法 JSON，已忽略")
         return headers
 
-    def __discover_signin_candidate(self, site_url: str) -> Optional[Tuple[str, str, Any, Dict[str, str]]]:
-        page_name = self._default_sign_page
-        page_url = self.__join_url(site_url, page_name)
-        html = self.__get_page_source(page_url)
-        if not html or self.__is_login_page(html):
-            return None
+    def __discover_signin_candidates(self, site_url: str) -> List[Tuple[str, str, Any, Dict[str, str]]]:
+        candidates = []
+        for page_name in self._default_sign_pages:
+            page_url = self.__join_url(site_url, page_name)
+            html = self.__get_page_source(page_url)
+            if not html or self.__is_login_page(html):
+                continue
 
-        action_id = self.__extract_server_action_id(html, site_url, action_name="checkIn")
-        if not action_id:
+            action_id = self.__extract_server_action_id(html, site_url, action_name="checkIn")
+            if not action_id:
+                continue
+
+            dynamic_headers = {
+                "Accept": "text/x-component",
+                "Content-Type": "text/plain;charset=UTF-8",
+                "Origin": site_url.rstrip("/"),
+                "Referer": page_url,
+                "next-action": action_id,
+                "next-router-state-tree": self.__build_next_router_state_tree(page_name),
+            }
+            dynamic_headers.update(self.__request_headers())
+            logger.info(
+                f"HDHive 已动态提取 {page_url} 的 checkIn action: {action_id[:12]}..."
+            )
+            candidates.append(("post", page_url, [False], dynamic_headers))
+
+        if not candidates:
             logger.warning("HDHive 动态提取 checkIn action 失败，将回退到静态候选接口")
-            return None
-
-        dynamic_headers = {
-            "Accept": "text/x-component",
-            "Content-Type": "text/plain;charset=UTF-8",
-            "next-action": action_id,
-            "next-router-state-tree": self.__build_next_router_state_tree(page_name),
-        }
-        dynamic_headers.update(self.__request_headers())
-        logger.info(f"HDHive 已动态提取 checkIn action: {action_id[:12]}...")
-        return "post", page_url, [False], dynamic_headers
+        return candidates
 
     def __extract_server_action_id(self, html: str, site_url: str, action_name: str) -> Optional[str]:
         chunk_paths = sorted(set(re.findall(r'/_next/static/chunks/[^"\s]+\.js', html or "")))
@@ -808,29 +814,52 @@ class HDHiveSignIn(_PluginBase):
 
     @staticmethod
     def __build_next_router_state_tree(page_name: str) -> str:
-        tree = [
-            "",
-            {
-                "children": [
-                    "(app)",
-                    {
-                        "children": [
-                            page_name,
-                            {
-                                "children": [
-                                    "__PAGE__",
-                                    {},
-                                ]
-                            },
-                        ]
-                    },
-                ]
-            },
-            None,
-            None,
-            True,
-        ]
-        return urllib.parse.quote(json.dumps(tree, separators=(",", ":")))
+        if not page_name:
+            tree = [
+                "",
+                {
+                    "children": [
+                        "(app)",
+                        {
+                            "children": [
+                                "__PAGE__",
+                                {},
+                                None,
+                                None,
+                            ]
+                        },
+                        None,
+                        None,
+                    ]
+                },
+                None,
+                None,
+                True,
+            ]
+        else:
+            tree = [
+                "",
+                {
+                    "children": [
+                        "(app)",
+                        {
+                            "children": [
+                                page_name,
+                                {
+                                    "children": [
+                                        "__PAGE__",
+                                        {},
+                                    ]
+                                },
+                            ]
+                        },
+                    ]
+                },
+                None,
+                None,
+                True,
+            ]
+        return urllib.parse.quote(json.dumps(tree, separators=(",", ":")), safe="()")
 
     def _load_schedule_config(self, legacy_cron: str = ""):
         if self._custom_cron:
