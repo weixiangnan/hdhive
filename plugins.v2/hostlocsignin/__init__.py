@@ -22,7 +22,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -606,8 +606,10 @@ class HostLocSignIn(_PluginBase):
         home_html = self.__get_page_source(site_url)
         if not home_html:
             return "", "签到失败，自动登录后无法访问站点首页"
-        if self.__is_login_page(home_html):
-            return "", "签到失败，自动登录后仍未进入登录状态"
+        if not self.__is_logged_in(home_html):
+            credit_html = self.__get_page_source(self.__join_url(site_url, self._credit_log_url))
+            if not self.__is_logged_in(credit_html):
+                return "", "签到失败，自动登录后仍未进入登录状态"
         return home_html, "自动登录成功"
 
     def __login_and_get_cookie(self, site_url: str) -> Tuple[str, str]:
@@ -768,14 +770,27 @@ class HostLocSignIn(_PluginBase):
             logger.error(f"HostLoc 请求页面失败：{url}，原因：{str(err)}")
             return ""
 
-    @staticmethod
-    def __is_login_page(text: str) -> bool:
+    @classmethod
+    def __is_login_page(cls, text: str) -> bool:
+        if cls.__is_logged_in(text):
+            return False
         lowered = (text or "").lower()
         return any(marker in lowered for marker in [
-            "member.php?mod=logging&action=login",
-            "登录 | 注册",
             "登录后才可以",
             "欢迎您回来",
+            "name=\"loginfield\"",
+            "id=\"lsform\"",
+        ])
+
+    @staticmethod
+    def __is_logged_in(text: str) -> bool:
+        content = text or ""
+        return any(marker in content for marker in [
+            "访问我的空间",
+            "退出</a>",
+            "积分:",
+            "home.php?mod=spacecp",
+            "member.php?mod=logging&action=logout",
         ])
 
     @staticmethod
