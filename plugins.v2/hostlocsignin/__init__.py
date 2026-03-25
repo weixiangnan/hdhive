@@ -14,14 +14,13 @@ from app.core.event import Event, eventmanager
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType
-from app.utils.http import RequestUtils
 
 
 class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.9"
+    plugin_version = "1.0.10"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -805,13 +804,16 @@ class HostLocSignIn(_PluginBase):
 
     def __get_page_source(self, url: str) -> str:
         try:
-            res = RequestUtils(
-                cookies=self._cookie,
-                ua=self._ua,
-                proxies=settings.PROXY if self._proxy else None,
+            headers = {"User-Agent": self._ua}
+            if self._cookie:
+                headers["Cookie"] = self._cookie
+            res = requests.get(
+                url,
+                headers=headers,
                 timeout=self._timeout,
-            ).get_res(url=url)
-            if not res:
+                proxies=settings.PROXY if self._proxy else None,
+            )
+            if res.status_code >= 400:
                 return ""
             return res.text or ""
         except Exception as err:
