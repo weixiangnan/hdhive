@@ -32,6 +32,7 @@ Available plugins:
 - `站点地址`: default `https://hostloc.com/`
 - `Cookie`: full logged-in browser cookie
 - `User-Agent`: browser UA matching the cookie
+- `多账号配置`: optional, one account per line using `username----password`
 - `访问空间次数`: default `10`
 - `自定义空间链接`: optional, one per line
 - `定时执行周期`: optional cron

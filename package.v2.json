@@ -17,11 +17,12 @@
     "name": "HostLoc 自动签到",
     "description": "独立执行 HostLoc 每天登录和访问别人空间积分任务。",
     "labels": "站点,签到,积分",
-    "version": "1.0.10",
+    "version": "1.1.0",
     "icon": "signin.png",
     "author": "weixiangnan",
     "level": 2,
     "history": {
+      "v1.1.0": "新增 HostLoc 多账号顺序执行，支持一行一个账号配置并分别记录执行结果。",
       "v1.0.10": "HostLoc 页面请求改为统一使用 requests 回放 Cookie，避免切回 RequestUtils 后登录态丢失。",
       "v1.0.9": "自动登录必须拿到 HostLoc 认证 Cookie（auth/saltkey）并通过会话自检，避免误报登录成功。",
       "v1.0.8": "自动登录改为读取 HostLoc 首页真实登录表单并提交动态 formhash，修复半登录态问题。",

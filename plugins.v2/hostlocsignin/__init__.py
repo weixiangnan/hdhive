@@ -20,7 +20,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.10"
+    plugin_version = "1.1.0"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -37,6 +37,7 @@ class HostLocSignIn(_PluginBase):
     _cookie: str = ""
     _username: str = ""
     _password: str = ""
+    _accounts_text: str = ""
     _ua: str = ""
     _proxy: bool = False
     _timeout: int = 20
@@ -44,6 +45,8 @@ class HostLocSignIn(_PluginBase):
     _visit_count: int = 10
     _space_urls_text: str = ""
     _scheduler: Optional[BackgroundScheduler] = None
+    _active_account_name: str = ""
+    _persist_runtime_cookie: bool = True
 
     _daily_login_rid = 15
     _visit_space_rid = 16
@@ -71,6 +74,7 @@ class HostLocSignIn(_PluginBase):
             self._cookie = (config.get("cookie") or "").strip()
             self._username = (config.get("username") or "").strip()
             self._password = (config.get("password") or "").strip()
+            self._accounts_text = (config.get("accounts") or "").strip()
             self._ua = (config.get("ua") or "").strip()
             self._proxy = bool(config.get("proxy"))
             self._site_url = (config.get("site_url") or "https://hostloc.com/").strip()
@@ -109,6 +113,7 @@ class HostLocSignIn(_PluginBase):
                 "cookie": self._cookie,
                 "username": self._username,
                 "password": self._password,
+                "accounts": self._accounts_text,
                 "ua": self._ua,
                 "proxy": self._proxy,
                 "timeout": self._timeout,
@@ -178,6 +183,24 @@ class HostLocSignIn(_PluginBase):
                                         "label": "密码(可选)",
                                         "type": "password",
                                         "placeholder": "填入后可在 Cookie 缺失或失效时自动登录"
+                                    }
+                                }]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [{
+                                    "component": "VTextarea",
+                                    "props": {
+                                        "model": "accounts",
+                                        "label": "多账号配置(可选)",
+                                        "rows": 5,
+                                        "placeholder": "一行一个账号，格式：用户名----密码；填写后优先按多账号逐个执行"
                                     }
                                 }]
                             }
@@ -453,6 +476,7 @@ class HostLocSignIn(_PluginBase):
             "cookie": "",
             "username": "",
             "password": "",
+            "accounts": "",
             "ua": "",
             "proxy": False,
             "timeout": 20,
@@ -512,6 +536,51 @@ class HostLocSignIn(_PluginBase):
         return ok, message
 
     def __do_signin(self) -> Tuple[bool, str]:
+        accounts = self.__build_accounts()
+        if len(accounts) > 1:
+            return self.__do_multi_signin(accounts)
+        if accounts:
+            return self.__run_account(accounts[0])
+        return self.__do_signin_single()
+
+    def __do_multi_signin(self, accounts: List[Dict[str, str]]) -> Tuple[bool, str]:
+        success_count = 0
+        results = []
+        for account in accounts:
+            ok, message = self.__run_account(account)
+            if ok:
+                success_count += 1
+            results.append(message)
+
+        overall_ok = success_count == len(accounts)
+        summary = f"多账号执行完成：成功 {success_count}/{len(accounts)}"
+        detail = "；".join(results[:5])
+        if len(results) > 5:
+            detail = f"{detail}；其余 {len(results) - 5} 个账号见执行记录"
+        return overall_ok, f"{summary}。{detail}" if detail else summary
+
+    def __run_account(self, account: Dict[str, str]) -> Tuple[bool, str]:
+        old_cookie = self._cookie
+        old_username = self._username
+        old_password = self._password
+        old_active_name = self._active_account_name
+        old_persist_cookie = self._persist_runtime_cookie
+        try:
+            self._active_account_name = account.get("name") or account.get("username") or "HostLoc"
+            self._username = account.get("username") or ""
+            self._password = account.get("password") or ""
+            self._cookie = account.get("cookie") or ""
+            self._persist_runtime_cookie = bool(account.get("persist_cookie"))
+            ok, message = self.__do_signin_single()
+            return ok, f"{self._active_account_name}: {message}"
+        finally:
+            self._cookie = old_cookie
+            self._username = old_username
+            self._password = old_password
+            self._active_account_name = old_active_name
+            self._persist_runtime_cookie = old_persist_cookie
+
+    def __do_signin_single(self) -> Tuple[bool, str]:
         if not self._ua:
             message = "签到失败，未配置 User-Agent"
             logger.error(message)
@@ -600,7 +669,8 @@ class HostLocSignIn(_PluginBase):
             return "", "", message or "签到失败，自动登录失败"
 
         self._cookie = cookie
-        self.__update_config()
+        if self._persist_runtime_cookie:
+            self.__update_config()
         home_html = self.__get_page_source(site_url)
         credit_html = self.__get_authenticated_credit_log(site_url)
         if not home_html:
@@ -680,6 +750,41 @@ class HostLocSignIn(_PluginBase):
         except Exception as err:
             logger.error(f"HostLoc 自动登录失败：{str(err)}")
             return "", f"签到失败，自动登录异常：{str(err)}"
+
+    def __build_accounts(self) -> List[Dict[str, str]]:
+        accounts = []
+        for line in self._accounts_text.splitlines():
+            raw = line.strip()
+            if not raw or raw.startswith("#"):
+                continue
+            parts = [part.strip() for part in raw.split("----")]
+            if len(parts) < 2:
+                continue
+            username = parts[0]
+            password = parts[1]
+            cookie = parts[2] if len(parts) > 2 else ""
+            if not username or not password:
+                continue
+            accounts.append({
+                "name": username,
+                "username": username,
+                "password": password,
+                "cookie": cookie,
+                "persist_cookie": False,
+            })
+
+        if accounts:
+            return accounts
+
+        if self._username or self._password or self._cookie:
+            return [{
+                "name": self._username or "默认账号",
+                "username": self._username,
+                "password": self._password,
+                "cookie": self._cookie,
+                "persist_cookie": True,
+            }]
+        return []
 
     def __collect_space_urls(self, site_url: str, home_html: str) -> List[str]:
         urls = []
@@ -860,10 +965,13 @@ class HostLocSignIn(_PluginBase):
 
     def __save_history(self, success: bool, message: str):
         history = self.get_data("history") or []
+        message_text = message
+        if self._active_account_name and not message.startswith(f"{self._active_account_name}:"):
+            message_text = f"{self._active_account_name}: {message}"
         history.insert(0, {
             "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "status": "SUCCESS" if success else "FAIL",
-            "message": message,
+            "message": message_text,
         })
         self.save_data("history", history[:20])
 
