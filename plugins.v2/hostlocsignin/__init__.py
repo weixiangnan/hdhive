@@ -1,7 +1,6 @@
 import re
 import time
 import urllib.parse
-from random import randint
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -22,7 +21,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -619,19 +618,26 @@ class HostLocSignIn(_PluginBase):
 
     def __login_and_get_cookie(self, site_url: str) -> Tuple[str, str]:
         try:
-            login_url = self.__join_url(site_url, "member.php")
             session = requests.Session()
+            session.headers.update({"User-Agent": self._ua})
+            home_response = session.get(
+                site_url,
+                timeout=self._timeout,
+                proxies=settings.PROXY if self._proxy else None,
+            )
+            home_text = home_response.text or ""
+            formhash_matched = re.search(r'name="formhash"\s+value="([^"]+)"', home_text)
+            action_matched = re.search(r'id="lsform"\s+action="([^"]+)"', home_text)
+            if not formhash_matched or not action_matched:
+                return "", "签到失败，自动登录未找到 HostLoc 登录表单"
+
+            login_url = urllib.parse.urljoin(site_url, action_matched.group(1).replace("&amp;", "&"))
             payload = {
-                "mod": "logging",
-                "action": "login",
-                "loginsubmit": "yes",
-                "infloat": "yes",
-                "lssubmit": "yes",
-                "inajax": "1",
                 "fastloginfield": "username",
                 "username": self._username,
-                "cookietime": str(randint(1234567, 7654321)),
+                "cookietime": "2592000",
                 "password": self._password,
+                "formhash": formhash_matched.group(1),
                 "quickforward": "yes",
                 "handlekey": "ls",
             }
