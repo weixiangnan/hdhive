@@ -22,7 +22,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -666,7 +666,7 @@ class HostLocSignIn(_PluginBase):
     def __collect_space_urls(self, site_url: str, home_html: str) -> List[str]:
         urls = []
         seen = set()
-        own_uid = self.__extract_uid(home_html)
+        own_uid = self.__extract_uid(home_html) or self.__extract_uid_from_cookie()
 
         def add(url: str):
             if not url:
@@ -690,7 +690,7 @@ class HostLocSignIn(_PluginBase):
 
         for path in self._extra_discovery_paths[1:]:
             html = self.__get_page_source(self.__join_url(site_url, path))
-            if not html or self.__is_login_page(html):
+            if not html:
                 continue
             for url in self.__extract_space_urls(site_url, html):
                 add(url)
@@ -749,6 +749,18 @@ class HostLocSignIn(_PluginBase):
     def __extract_uid(html: str) -> Optional[str]:
         matched = re.search(r"space-uid-(\d+)\.html", html or "")
         return matched.group(1) if matched else None
+
+    def __extract_uid_from_cookie(self) -> Optional[str]:
+        cookie = self._cookie or ""
+        for pattern in [
+            r"_st_t=(\d+)\|",
+            r"_lastcheckfeed=(\d+)%7C",
+            r"_lastcheckfeed=(\d+)\|",
+        ]:
+            matched = re.search(pattern, cookie)
+            if matched:
+                return matched.group(1)
+        return None
 
     @staticmethod
     def __extract_space_urls(site_url: str, html: str) -> List[str]:
