@@ -20,7 +20,7 @@ class HostLocSignIn(_PluginBase):
     plugin_name = "HostLoc 自动签到"
     plugin_desc = "独立执行 HostLoc 每天登录和访问别人空间积分任务。"
     plugin_icon = "signin.png"
-    plugin_version = "1.1.0"
+    plugin_version = "1.1.1"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hostlocsignin_"
@@ -596,8 +596,16 @@ class HostLocSignIn(_PluginBase):
             return False, message
 
         before_score = self.__query_score(site_url)
-        daily_login_done_before = self.__parse_rule_count(credit_log_before, self._daily_login_rid) > 0
-        visit_done_before = self.__parse_rule_count(credit_log_before, self._visit_space_rid)
+        today_str = datetime.now(tz=pytz.timezone(settings.TZ)).strftime("%Y-%m-%d")
+        daily_login_info_before = self.__parse_rule_info(credit_log_before, self._daily_login_rid)
+        visit_info_before = self.__parse_rule_info(credit_log_before, self._visit_space_rid)
+        daily_login_done_before = (
+            daily_login_info_before["count"] > 0
+            and str(daily_login_info_before["last_time"]).startswith(today_str)
+        )
+        visit_done_before = visit_info_before["count"]
+        if visit_done_before > 0 and not str(visit_info_before["last_time"]).startswith(today_str):
+            visit_done_before = 0
         visit_target = min(max(self._visit_count, 1), 10)
         visit_remaining = max(0, visit_target - visit_done_before)
 
@@ -621,8 +629,15 @@ class HostLocSignIn(_PluginBase):
 
         credit_log_after = self.__get_authenticated_credit_log(site_url)
         after_score = self.__query_score(site_url)
-        daily_login_done_after = self.__parse_rule_count(credit_log_after, self._daily_login_rid) > 0
-        visit_done_after = self.__parse_rule_count(credit_log_after, self._visit_space_rid)
+        daily_login_info_after = self.__parse_rule_info(credit_log_after, self._daily_login_rid)
+        visit_info_after = self.__parse_rule_info(credit_log_after, self._visit_space_rid)
+        daily_login_done_after = (
+            daily_login_info_after["count"] > 0
+            and str(daily_login_info_after["last_time"]).startswith(today_str)
+        )
+        visit_done_after = visit_info_after["count"]
+        if visit_done_after > 0 and not str(visit_info_after["last_time"]).startswith(today_str):
+            visit_done_after = 0
         visit_added = max(0, visit_done_after - visit_done_before)
 
         daily_login_text = "每天登录已完成" if daily_login_done_after else "每天登录未确认"
@@ -856,17 +871,20 @@ class HostLocSignIn(_PluginBase):
         return None
 
     @staticmethod
-    def __parse_rule_count(html: str, rid: int) -> int:
+    def __parse_rule_info(html: str, rid: int) -> Dict[str, Any]:
         if not html:
-            return 0
+            return {"count": 0, "last_time": ""}
         matched = re.search(
-            rf'rid={rid}[^>]*>.*?</a></td>\s*<td>\d+</td>\s*<td>(\d+)</td>',
+            rf'rid={rid}[^>]*>.*?</a></td>\s*<td>\d+</td>\s*<td>(\d+)</td>\s*<td>\d+</td>\s*<td>\d+</td>\s*<td>([^<]+)</td>',
             html,
             re.IGNORECASE | re.DOTALL,
         )
         if matched:
-            return int(matched.group(1))
-        return 0
+            return {
+                "count": int(matched.group(1)),
+                "last_time": matched.group(2).strip(),
+            }
+        return {"count": 0, "last_time": ""}
 
     @staticmethod
     def __extract_uid(html: str) -> Optional[str]:
