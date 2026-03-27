@@ -7,6 +7,7 @@ MoviePilot V2 standalone plugins for HDHive and HostLoc sign-in / points tasks.
 - `package.v2.json`
 - `plugins.v2/hdhivesignin/__init__.py`
 - `plugins.v2/hostlocsignin/__init__.py`
+- `plugins.v2/nodeseeksign/__init__.py`
 
 ## Install
 
@@ -16,6 +17,7 @@ Available plugins:
 
 - `HDHive 自动签到`
 - `HostLoc 自动签到`
+- `NodeSeek论坛签到`
 
 ## Configure
 
@@ -37,6 +39,13 @@ Available plugins:
 - `自定义空间链接`: optional, one per line
 - `定时执行周期`: optional cron
 - `立即运行一次`: save once to test
+
+### NodeSeek
+
+- `Cookie`: NodeSeek 登录 Cookie
+- `用户名/邮箱`: optional, used for auto login when Cookie is missing/expired
+- `密码`: optional, masked input, used for auto login when Cookie is missing/expired
+- `签到周期`: optional cron
 
 ## Notes
 
