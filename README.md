@@ -43,8 +43,6 @@ Available plugins:
 ### NodeSeek
 
 - `Cookie`: NodeSeek 登录 Cookie
-- `用户名/邮箱`: optional, used for auto login when Cookie is missing/expired
-- `密码`: optional, masked input, used for auto login when Cookie is missing/expired
 - `签到周期`: optional cron
 
 ## Notes

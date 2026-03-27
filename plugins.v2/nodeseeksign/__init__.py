@@ -50,7 +50,7 @@ class nodeseeksign(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/madrays/MoviePilot-Plugins/main/icons/nodeseeksign.png"
     # 插件版本
-    plugin_version = "2.2.1"
+    plugin_version = "2.2.2"
     # 插件作者
     plugin_author = "madrays"
     # 作者主页
@@ -65,8 +65,6 @@ class nodeseeksign(_PluginBase):
     # 私有属性
     _enabled = False
     _cookie = None
-    _username = ""
-    _password = ""
     _notify = False
     _onlyonce = False
     _clear_history = False  # 新增：是否清除历史记录
@@ -98,8 +96,6 @@ class nodeseeksign(_PluginBase):
             if config:
                 self._enabled = config.get("enabled")
                 self._cookie = config.get("cookie")
-                self._username = (config.get("username") or "").strip()
-                self._password = (config.get("password") or "").strip()
                 self._notify = config.get("notify")
                 self._cron = config.get("cron")
                 self._onlyonce = config.get("onlyonce")
@@ -172,8 +168,6 @@ class nodeseeksign(_PluginBase):
                     "onlyonce": False,
                     "enabled": self._enabled,
                     "cookie": self._cookie,
-                    "username": self._username,
-                    "password": self._password,
                     "notify": self._notify,
                     "cron": self._cron,
                     "random_choice": self._random_choice,
@@ -203,8 +197,6 @@ class nodeseeksign(_PluginBase):
                         "onlyonce": False,
                         "enabled": self._enabled,
                         "cookie": self._cookie,
-                        "username": self._username,
-                        "password": self._password,
                         "notify": self._notify,
                         "cron": self._cron,
                         "random_choice": self._random_choice,
@@ -231,36 +223,27 @@ class nodeseeksign(_PluginBase):
         sign_dict = None
         
         try:
-            # 检查Cookie，缺失时尝试自动登录
+            # 检查Cookie
             if not self._cookie:
-                ok, msg = self._try_auto_login()
-                if not ok:
-                    logger.error(msg)
-                    sign_dict = {
-                        "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        "status": f"签到失败: {msg}",
-                    }
-                    self._save_sign_history(sign_dict)
-                    if self._notify:
-                        self.post_message(
-                            mtype=NotificationType.SiteMessage,
-                            title="【NodeSeek论坛签到失败】",
-                            text=msg
-                        )
-                    return sign_dict
+                logger.error("未配置Cookie")
+                sign_dict = {
+                    "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    "status": "签到失败: 未配置Cookie",
+                }
+                self._save_sign_history(sign_dict)
+                if self._notify:
+                    self.post_message(
+                        mtype=NotificationType.SiteMessage,
+                        title="【NodeSeek论坛签到失败】",
+                        text="未配置Cookie，请在设置中手动填写NodeSeek Cookie"
+                    )
+                return sign_dict
             
             # 请求前随机等待
             self._wait_random_interval()
             
             # 无论任何情况都尝试执行API签到
             result = self._run_api_sign()
-            if self._need_refresh_cookie(result):
-                logger.warning("检测到 NodeSeek Cookie 失效，尝试自动登录刷新 Cookie")
-                ok, msg = self._try_auto_login()
-                if ok:
-                    result = self._run_api_sign()
-                else:
-                    logger.error(f"自动登录失败：{msg}")
             
             # 始终获取最新用户信息
             user_info = None
@@ -544,116 +527,6 @@ class nodeseeksign(_PluginBase):
             logger.error(f"API签到出错: {str(e)}", exc_info=True)
             return {"success": False, "message": f"API签到出错: {str(e)}"}
 
-    def _need_refresh_cookie(self, result: dict) -> bool:
-        if not result:
-            return False
-        message = str(result.get("message", "") or "").lower()
-        if result.get("success"):
-            return False
-        if self._username and self._password and any(token in message for token in [
-            "api签到出错",
-            "non-json/non-200",
-            "cloudflare",
-            "challenge",
-            "403",
-            "forbidden",
-        ]):
-            return True
-        return any(token in message for token in [
-            "cookie已失效",
-            "user not found",
-            "未登录",
-            "登录",
-            "cookie",
-        ])
-
-    def _try_auto_login(self) -> Tuple[bool, str]:
-        if not self._username or not self._password:
-            return False, "未配置Cookie，且未配置用户名/密码自动登录"
-
-        candidates = [
-            ("https://www.nodeseek.com/api/account/login", "json"),
-            ("https://www.nodeseek.com/api/auth/login", "json"),
-            ("https://www.nodeseek.com/api/account/signin", "json"),
-            ("https://www.nodeseek.com/api/account/sign-in", "json"),
-            ("https://www.nodeseek.com/auth/login", "form"),
-        ]
-        proxies = self._get_proxies()
-
-        for url, payload_type in candidates:
-            try:
-                headers = {
-                    "Accept": "*/*",
-                    "Origin": "https://www.nodeseek.com",
-                    "Referer": "https://www.nodeseek.com/",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-                }
-                if payload_type == "json":
-                    headers["Content-Type"] = "application/json"
-                    payload = {
-                        "username": self._username,
-                        "email": self._username,
-                        "account": self._username,
-                        "password": self._password,
-                    }
-                    resp = self._smart_post(url=url, headers=headers, json=payload, proxies=proxies, timeout=30)
-                else:
-                    headers["Content-Type"] = "application/x-www-form-urlencoded"
-                    payload = {
-                        "username": self._username,
-                        "email": self._username,
-                        "account": self._username,
-                        "password": self._password,
-                    }
-                    resp = self._smart_post(url=url, headers=headers, data=urlencode(payload), proxies=proxies, timeout=30)
-
-                cookie_jar = []
-                try:
-                    if hasattr(resp, "cookies") and resp.cookies:
-                        cookie_jar = [f"{c.name}={c.value}" for c in resp.cookies]
-                except Exception:
-                    cookie_jar = []
-
-                set_cookie = ""
-                try:
-                    set_cookie = resp.headers.get("set-cookie") or resp.headers.get("Set-Cookie") or ""
-                except Exception:
-                    pass
-
-                if cookie_jar:
-                    self._cookie = "; ".join(cookie_jar)
-                    self.update_config({
-                        "enabled": self._enabled,
-                        "cookie": self._cookie,
-                        "username": self._username,
-                        "password": self._password,
-                        "notify": self._notify,
-                        "cron": self._cron,
-                        "random_choice": self._random_choice,
-                        "history_days": self._history_days,
-                        "use_proxy": self._use_proxy,
-                        "max_retries": self._max_retries,
-                        "verify_ssl": self._verify_ssl,
-                        "min_delay": self._min_delay,
-                        "max_delay": self._max_delay,
-                        "member_id": self._member_id,
-                        "clear_history": self._clear_history,
-                        "stats_days": self._stats_days
-                    })
-                    logger.info(f"NodeSeek 自动登录成功，已回填 Cookie，接口：{url}")
-                    return True, "自动登录成功"
-
-                text = ""
-                try:
-                    text = resp.text or ""
-                except Exception:
-                    text = ""
-                if set_cookie or any(token in text.lower() for token in ["success", "token", "登录成功"]):
-                    logger.info(f"NodeSeek 自动登录接口返回成功信号但未提取到 Cookie，接口：{url}")
-            except Exception as e:
-                logger.warning(f"NodeSeek 自动登录尝试失败：{url}，原因：{str(e)}")
-
-        return False, "NodeSeek 自动登录失败，请手动填写Cookie或更新Cookie"
 
     def _scraper_warmup_and_attach_user_cookie(self):
         try:
@@ -1386,46 +1259,6 @@ class nodeseeksign(_PluginBase):
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'username',
-                                            'label': '用户名/邮箱（可选）',
-                                            'placeholder': '用于Cookie缺失或失效时自动登录'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'password',
-                                            'label': '密码（可选）',
-                                            'type': 'password',
-                                            'placeholder': '用于Cookie缺失或失效时自动登录'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
                                     'md': 3
                                 },
                                 'content': [
@@ -1613,7 +1446,7 @@ class nodeseeksign(_PluginBase):
                                         'props': {
                                             'model': 'cookie',
                                             'label': '站点Cookie',
-                                            'placeholder': '请输入站点Cookie值；留空时可尝试用户名/密码自动登录'
+                                            'placeholder': '请输入站点Cookie值'
                                         }
                                     }
                                 ]
@@ -1710,7 +1543,7 @@ class nodeseeksign(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': f'【使用教程】\n1. 优先填写NodeSeek Cookie，缺失或失效时插件会尝试用用户名/密码自动登录\n2. 如需手动获取Cookie，登录NodeSeek论坛网站，按F12打开开发者工具\n3. 在"网络"或"应用"选项卡中复制Cookie并粘贴到上方输入框\n4. 设置签到时间，建议早上8点(0 8 * * *)\n5. 启用插件并保存\n\n【功能说明】\n• 随机奖励：开启则使用随机奖励，关闭则使用固定奖励\n• 使用代理：开启则使用系统配置的代理服务器访问NodeSeek\n• 验证SSL证书：关闭可能解决SSL连接问题，但会降低安全性\n• 失败重试：设置签到失败后的最大重试次数，将在5-15分钟后随机重试\n• 随机延迟：请求前随机等待，降低被风控概率\n• 用户信息：配置成员ID后，通知中展示用户名/等级/鸡腿\n• 立即运行一次：手动触发一次签到\n• 清除历史记录：勾选后保存配置，插件将清空所有签到历史、用户信息等数据，使用后会自动关闭\n\n【环境状态】\n• curl_cffi: {curl_cffi_status}；cloudscraper: {cloudscraper_status}'
+                                            'text': f'【使用教程】\n1. 登录NodeSeek论坛网站，按F12打开开发者工具\n2. 在"网络"或"应用"选项卡中复制Cookie\n3. 粘贴Cookie到上方输入框\n4. 设置签到时间，建议早上8点(0 8 * * *)\n5. 启用插件并保存\n\n【重要说明】\n• NodeSeek 当前登录需要 Turnstile / reCAPTCHA 验证\n• MoviePilot 后端插件无法自动完成该验证码，因此需要手动填写Cookie\n• 若Cookie失效，请重新从浏览器复制最新Cookie\n\n【功能说明】\n• 随机奖励：开启则使用随机奖励，关闭则使用固定奖励\n• 使用代理：开启则使用系统配置的代理服务器访问NodeSeek\n• 验证SSL证书：关闭可能解决SSL连接问题，但会降低安全性\n• 失败重试：设置签到失败后的最大重试次数，将在5-15分钟后随机重试\n• 随机延迟：请求前随机等待，降低被风控概率\n• 用户信息：配置成员ID后，通知中展示用户名/等级/鸡腿\n• 立即运行一次：手动触发一次签到\n• 清除历史记录：勾选后保存配置，插件将清空所有签到历史、用户信息等数据，使用后会自动关闭\n\n【环境状态】\n• curl_cffi: {curl_cffi_status}；cloudscraper: {cloudscraper_status}'
                                         }
                                     }
                                 ]
@@ -1724,8 +1557,6 @@ class nodeseeksign(_PluginBase):
             "notify": True,
             "onlyonce": False,
             "cookie": "",
-            "username": "",
-            "password": "",
             "cron": "0 8 * * *",
             "random_choice": True,
             "history_days": 30,
