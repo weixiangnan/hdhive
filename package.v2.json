@@ -41,11 +41,12 @@
     "name": "NodeSeek论坛签到",
     "description": "自动完成NodeSeek论坛每日签到，支持用户名密码自动登录补Cookie。",
     "labels": "站点,签到",
-    "version": "2.2.0",
+    "version": "2.2.1",
     "icon": "https://raw.githubusercontent.com/madrays/MoviePilot-Plugins/main/icons/nodeseeksign.png",
     "author": "madrays,weixiangnan",
     "level": 2,
     "history": {
+      "v2.2.1": "放宽NodeSeek自动补Cookie触发条件，签到失败时会优先尝试用户名密码自动登录后重试。",
       "v2.2.0": "新增用户名/密码自动登录补Cookie，并将密码输入框改为星号显示。",
       "v2.1.0": "上游版本基础功能。"
     }

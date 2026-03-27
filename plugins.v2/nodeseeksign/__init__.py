@@ -50,7 +50,7 @@ class nodeseeksign(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/madrays/MoviePilot-Plugins/main/icons/nodeseeksign.png"
     # 插件版本
-    plugin_version = "2.2.0"
+    plugin_version = "2.2.1"
     # 插件作者
     plugin_author = "madrays"
     # 作者主页
@@ -550,6 +550,15 @@ class nodeseeksign(_PluginBase):
         message = str(result.get("message", "") or "").lower()
         if result.get("success"):
             return False
+        if self._username and self._password and any(token in message for token in [
+            "api签到出错",
+            "non-json/non-200",
+            "cloudflare",
+            "challenge",
+            "403",
+            "forbidden",
+        ]):
+            return True
         return any(token in message for token in [
             "cookie已失效",
             "user not found",
@@ -644,7 +653,7 @@ class nodeseeksign(_PluginBase):
             except Exception as e:
                 logger.warning(f"NodeSeek 自动登录尝试失败：{url}，原因：{str(e)}")
 
-        return False, "NodeSeek 自动登录失败，请手动填写Cookie"
+        return False, "NodeSeek 自动登录失败，请手动填写Cookie或更新Cookie"
 
     def _scraper_warmup_and_attach_user_cookie(self):
         try:
