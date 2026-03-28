@@ -3,11 +3,12 @@
     "name": "HDHive 自动签到",
     "description": "独立执行 HDHive 站点签到，支持定时和立即运行。",
     "labels": "站点,签到",
-    "version": "1.12",
+    "version": "1.13",
     "icon": "signin.png",
     "author": "weixiangnan",
     "level": 2,
     "history": {
+      "v1.13": "HDHive 自动登录改为同一 requests 会话先打开登录页再提交登录，并回访首页确认登录态后回填 Cookie。",
       "v1.12": "新增 HDHive 用户名密码自动登录补 Cookie，按真实登录页 Server Action 回填 Cookie。",
       "v1.11": "按线上真实请求修复 HDHive 签到，优先走首页 Server Action，并补齐 next-router-state-tree、Origin、Referer 头。",
       "v1.10": "改为每日小时/分钟调度 UI，保留高级 cron 覆盖；修复 HDHive Server Action 签到识别与已签到判断。",
