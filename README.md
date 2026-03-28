@@ -25,6 +25,7 @@ Available plugins:
 
 - `站点地址`: default `https://hdhive.com/`
 - `Cookie`: full logged-in browser cookie
+- `用户名/密码`: optional, used for auto login when Cookie is missing/expired
 - `User-Agent`: browser UA matching the cookie
 - `定时执行周期`: optional cron
 - `立即运行一次`: save once to test

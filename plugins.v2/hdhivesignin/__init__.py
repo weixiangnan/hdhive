@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
+import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -21,7 +22,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.11"
+    plugin_version = "1.12"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -36,6 +37,8 @@ class HDHiveSignIn(_PluginBase):
     _run_minute: int = 0
     _custom_cron: str = ""
     _cookie: str = ""
+    _username: str = ""
+    _password: str = ""
     _ua: str = ""
     _proxy: bool = False
     _timeout: int = 20
@@ -76,6 +79,8 @@ class HDHiveSignIn(_PluginBase):
             self._custom_cron = (config.get("custom_cron") or "").strip()
             legacy_cron = (config.get("cron") or "").strip()
             self._cookie = (config.get("cookie") or "").strip()
+            self._username = (config.get("username") or "").strip()
+            self._password = (config.get("password") or "").strip()
             self._ua = (config.get("ua") or "").strip()
             self._proxy = bool(config.get("proxy"))
             self._site_url = (config.get("site_url") or "https://hdhive.com/").strip()
@@ -116,6 +121,8 @@ class HDHiveSignIn(_PluginBase):
                 "run_minute": self._run_minute,
                 "custom_cron": self._custom_cron,
                 "cookie": self._cookie,
+                "username": self._username,
+                "password": self._password,
                 "ua": self._ua,
                 "proxy": self._proxy,
                 "timeout": self._timeout,
@@ -164,6 +171,36 @@ class HDHiveSignIn(_PluginBase):
             {
                 "component": "VForm",
                 "content": [
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "username",
+                                        "label": "用户名(可选)",
+                                        "placeholder": "Cookie 缺失或失效时可尝试自动登录"
+                                    }
+                                }]
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "password",
+                                        "label": "密码(可选)",
+                                        "type": "password",
+                                        "placeholder": "Cookie 缺失或失效时可尝试自动登录"
+                                    }
+                                }]
+                            }
+                        ]
+                    },
                     {
                         "component": "VRow",
                         "content": [
@@ -438,7 +475,7 @@ class HDHiveSignIn(_PluginBase):
                                         "model": "cookie",
                                         "label": "Cookie",
                                         "rows": 6,
-                                        "placeholder": "粘贴浏览器中 HDHive 登录后的完整 Cookie"
+                                        "placeholder": "粘贴浏览器中 HDHive 登录后的完整 Cookie；留空时可尝试用户名/密码自动登录"
                                     }
                                 }]
                             }
@@ -473,7 +510,7 @@ class HDHiveSignIn(_PluginBase):
                                     "props": {
                                         "type": "info",
                                         "variant": "tonal",
-                                        "text": "默认按“每日执行小时/分钟”生成计划，例如 08:00 会生成 0 8 * * *。只有需要复杂计划时才填写高级 cron 覆盖。HDHive 当前签到走前端 Server Action，默认会尝试 POST /tv + [false]；如失败，请把浏览器抓到的 next-action 等请求头填入自定义请求头。"
+                                        "text": "默认按“每日执行小时/分钟”生成计划，例如 08:00 会生成 0 8 * * *。只有需要复杂计划时才填写高级 cron 覆盖。HDHive 当前签到走前端 Server Action，默认会尝试 POST /tv + [false]；如失败，请把浏览器抓到的 next-action 等请求头填入自定义请求头。Cookie 缺失或失效时，插件也会尝试用用户名/密码自动登录并回填新的 Cookie。"
                                     }
                                 }]
                             }
@@ -490,6 +527,8 @@ class HDHiveSignIn(_PluginBase):
             "run_minute": 0,
             "custom_cron": "",
             "cookie": "",
+            "username": "",
+            "password": "",
             "ua": "",
             "proxy": False,
             "timeout": 20,
@@ -553,12 +592,6 @@ class HDHiveSignIn(_PluginBase):
         return ok, message
 
     def __do_signin(self) -> Tuple[bool, str]:
-        if not self._cookie:
-            message = "签到失败，未配置 Cookie"
-            logger.error(message)
-            self.__save_history(False, message)
-            return False, message
-
         if not self._ua:
             message = "签到失败，未配置 User-Agent"
             logger.error(message)
@@ -566,9 +599,9 @@ class HDHiveSignIn(_PluginBase):
             return False, message
 
         site_url = self._site_url.rstrip("/") + "/"
-        home_html = self.__get_page_source(site_url)
+        home_html, ensure_message = self.__ensure_cookie(site_url)
         if not home_html:
-            message = "签到失败，请检查站点连通性"
+            message = ensure_message or "签到失败，请检查站点连通性"
             logger.error(message)
             self.__save_history(False, message)
             return False, message
@@ -668,6 +701,77 @@ class HDHiveSignIn(_PluginBase):
         except Exception as err:
             logger.error(f"HDHive 请求签到接口异常：{url}，原因：{str(err)}")
             return False, str(err)
+
+    def __ensure_cookie(self, site_url: str) -> Tuple[str, str]:
+        if self._cookie:
+            home_html = self.__get_page_source(site_url)
+            if home_html and not self.__is_login_page(home_html):
+                return home_html, ""
+
+        if not self._username or not self._password:
+            if self._cookie:
+                return "", "签到失败，Cookie已失效，且未配置用户名/密码自动登录"
+            return "", "签到失败，未配置 Cookie，且未配置用户名/密码自动登录"
+
+        cookie, message = self.__login_and_get_cookie(site_url)
+        if not cookie:
+            return "", message or "签到失败，自动登录失败"
+
+        self._cookie = cookie
+        self.__update_config()
+        home_html = self.__get_page_source(site_url)
+        if not home_html:
+            return "", "签到失败，自动登录后无法访问站点首页"
+        if self.__is_login_page(home_html):
+            return "", "签到失败，自动登录后仍未进入登录状态"
+        return home_html, "自动登录成功"
+
+    def __login_and_get_cookie(self, site_url: str) -> Tuple[str, str]:
+        try:
+            login_url = self.__join_url(site_url, "login")
+            login_html = self.__get_page_source(login_url)
+            if not login_html or self.__is_login_page(login_html) is False and "用户名" not in login_html:
+                login_html = self.__fetch_text(login_url)
+
+            action_id = self.__extract_server_action_id(login_html, site_url, action_name="login")
+            if not action_id:
+                return "", "签到失败，未提取到 HDHive 登录 action"
+
+            headers = {
+                "Accept": "text/x-component",
+                "Content-Type": "text/plain;charset=UTF-8",
+                "Origin": site_url.rstrip("/"),
+                "Referer": login_url,
+                "next-action": action_id,
+                "next-router-state-tree": self.__build_login_router_state_tree(),
+            }
+            payload = json.dumps([{
+                "username": self._username,
+                "password": self._password,
+            }, "/"])
+
+            session = requests.Session()
+            response = session.post(
+                login_url,
+                headers=headers,
+                data=payload,
+                timeout=self._timeout,
+                proxies=settings.PROXY if self._proxy else None,
+            )
+            text = response.text or ""
+            if response.status_code >= 400:
+                return "", f"签到失败，自动登录返回状态码 {response.status_code}"
+            if "401" in text or "用户名或密码错误" in text or "ç”¨æˆ·åæˆ–å¯†ç é”™è¯¯" in text:
+                return "", "签到失败，HDHive 用户名或密码错误"
+
+            cookie = "; ".join(f"{c.name}={c.value}" for c in session.cookies)
+            if not cookie:
+                return "", "签到失败，自动登录未获取到 Cookie"
+            logger.info(f"HDHive 自动登录成功，已回填 Cookie，action={action_id[:12]}...")
+            return cookie, "自动登录成功"
+        except Exception as err:
+            logger.error(f"HDHive 自动登录失败：{str(err)}")
+            return "", f"签到失败，自动登录异常：{str(err)}"
 
     def __get_page_source(self, url: str) -> str:
         res = RequestUtils(
@@ -859,6 +963,38 @@ class HDHiveSignIn(_PluginBase):
                 None,
                 True,
             ]
+        return urllib.parse.quote(json.dumps(tree, separators=(",", ":")), safe="()")
+
+    @staticmethod
+    def __build_login_router_state_tree() -> str:
+        tree = [
+            "",
+            {
+                "children": [
+                    "(auth)",
+                    {
+                        "children": [
+                            "login",
+                            {
+                                "children": [
+                                    "__PAGE__",
+                                    {},
+                                    None,
+                                    None,
+                                ]
+                            },
+                            None,
+                            None,
+                        ]
+                    },
+                    None,
+                    None,
+                ]
+            },
+            None,
+            None,
+            True,
+        ]
         return urllib.parse.quote(json.dumps(tree, separators=(",", ":")), safe="()")
 
     def _load_schedule_config(self, legacy_cron: str = ""):
