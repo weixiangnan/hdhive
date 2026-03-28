@@ -22,7 +22,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.14"
+    plugin_version = "1.15"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -764,6 +764,9 @@ class HDHiveSignIn(_PluginBase):
                 proxies=settings.PROXY if self._proxy else None,
             )
             text = response.text or ""
+            logger.info(f"HDHive 自动登录响应状态码: {response.status_code}")
+            if text:
+                logger.info(f"HDHive 自动登录响应片段: {re.sub(r'\\s+', ' ', text)[:300]}")
             if response.status_code >= 400:
                 return "", "", f"签到失败，自动登录返回状态码 {response.status_code}"
             if "401" in text or "用户名或密码错误" in text or "ç”¨æˆ·åæˆ–å¯†ç é”™è¯¯" in text:
@@ -775,6 +778,7 @@ class HDHiveSignIn(_PluginBase):
                 proxies=settings.PROXY if self._proxy else None,
             )
             home_html = home_response.text or ""
+            logger.info(f"HDHive 自动登录后首页状态码: {home_response.status_code}")
             if self.__is_login_page(home_html):
                 return "", "", "签到失败，自动登录后仍停留在未登录状态"
 
