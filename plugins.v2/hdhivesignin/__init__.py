@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import subprocess
+import tempfile
 import time
 import urllib.parse
 from datetime import datetime, timedelta
@@ -22,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.18"
+    plugin_version = "1.19"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -732,79 +735,192 @@ class HDHiveSignIn(_PluginBase):
             logger.info(
                 f"HDHive 自动登录提交信息: username={masked_user}, username_len={len(self._username or '')}, password_len={len(self._password or '')}"
             )
-            session = requests.Session()
-            session.headers.update({"User-Agent": self._ua})
-            login_page = session.get(
-                login_url,
-                timeout=self._timeout,
-                proxies=settings.PROXY if self._proxy else None,
-            )
-            login_html = login_page.text or ""
-            if not login_html:
-                return "", "", "签到失败，自动登录前无法打开 HDHive 登录页"
+            with tempfile.TemporaryDirectory(prefix="hdhive_login_") as tempdir:
+                cookie_file = os.path.join(tempdir, "cookie.txt")
+                header_file = os.path.join(tempdir, "headers.txt")
+                body_file = os.path.join(tempdir, "body.txt")
+                home_file = os.path.join(tempdir, "home.html")
 
-            action_id = self.__extract_server_action_id(login_html, site_url, action_name="login")
-            if not action_id:
-                return "", "", "签到失败，未提取到 HDHive 登录 action"
+                get_cmd = self.__build_curl_command(
+                    url=login_url,
+                    cookie_file=cookie_file,
+                    output_file=body_file,
+                )
+                get_result = subprocess.run(get_cmd, capture_output=True, text=True, timeout=self._timeout + 10)
+                if get_result.returncode != 0:
+                    return "", "", f"签到失败，自动登录前打开 HDHive 登录页失败：{get_result.stderr.strip()}"
 
-            headers = {
-                "Accept": "text/x-component",
-                "Content-Type": "text/plain;charset=UTF-8",
-                "Origin": site_url.rstrip("/"),
-                "Referer": login_url,
-                "next-action": action_id,
-                "next-router-state-tree": self.__build_login_router_state_tree(),
-            }
-            payload = json.dumps([{
-                "username": self._username,
-                "password": self._password,
-            }, "/"])
+                login_html = self.__read_text_file(body_file)
+                if not login_html:
+                    return "", "", "签到失败，自动登录前无法打开 HDHive 登录页"
 
-            response = session.post(
-                login_url,
-                headers=headers,
-                data=payload,
-                timeout=self._timeout,
-                proxies=settings.PROXY if self._proxy else None,
-                allow_redirects=False,
-            )
-            text = response.text or ""
-            logger.info(f"HDHive 自动登录响应状态码: {response.status_code}")
-            if text:
-                logger.info(f"HDHive 自动登录响应片段: {re.sub(r'\\s+', ' ', text)[:300]}")
-            logger.info(
-                f"HDHive 自动登录响应头: x-action-redirect={response.headers.get('x-action-redirect')}, "
-                f"x-action-revalidated={response.headers.get('x-action-revalidated')}"
-            )
-            set_cookie = response.headers.get("set-cookie") or response.headers.get("Set-Cookie") or ""
-            if set_cookie:
-                logger.info(f"HDHive 自动登录 set-cookie: {set_cookie[:500]}")
-            logger.info(f"HDHive 自动登录会话Cookie: {list(session.cookies.keys())}")
-            if response.status_code >= 400:
-                return "", "", f"签到失败，自动登录返回状态码 {response.status_code}"
-            if "401" in text or "用户名或密码错误" in text or "ç”¨æˆ·åæˆ–å¯†ç é”™è¯¯" in text:
-                return "", "", "签到失败，HDHive 用户名或密码错误"
-            if response.status_code not in [200, 303]:
-                return "", "", f"签到失败，自动登录返回异常状态码 {response.status_code}"
+                action_id = self.__extract_server_action_id(login_html, site_url, action_name="login")
+                if not action_id:
+                    return "", "", "签到失败，未提取到 HDHive 登录 action"
 
-            home_response = session.get(
-                site_url,
-                timeout=self._timeout,
-                proxies=settings.PROXY if self._proxy else None,
-            )
-            home_html = home_response.text or ""
-            logger.info(f"HDHive 自动登录后首页状态码: {home_response.status_code}")
-            if self.__is_login_page(home_html):
-                return "", "", "签到失败，自动登录后仍停留在未登录状态"
+                headers = {
+                    "Accept": "text/x-component",
+                    "Content-Type": "text/plain;charset=UTF-8",
+                    "Origin": site_url.rstrip("/"),
+                    "Referer": login_url,
+                    "next-action": action_id,
+                    "next-router-state-tree": self.__build_login_router_state_tree(),
+                    "DNT": "1",
+                    "Sec-Fetch-Dest": "empty",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Site": "same-origin",
+                    "sec-ch-ua": "\"Chromium\";v=\"146\", \"Not-A.Brand\";v=\"24\", \"Google Chrome\";v=\"146\"",
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": "\"macOS\"",
+                }
+                payload = json.dumps([{
+                    "username": self._username,
+                    "password": self._password,
+                }, "/"], separators=(",", ":"))
 
-            cookie = "; ".join(f"{c.name}={c.value}" for c in session.cookies if c.value)
-            if not cookie:
-                return "", "", "签到失败，自动登录后会话中未提取到 Cookie"
-            logger.info(f"HDHive 自动登录成功，已回填 Cookie，action={action_id[:12]}...")
-            return cookie, home_html, "自动登录成功"
+                post_cmd = self.__build_curl_command(
+                    url=login_url,
+                    cookie_file=cookie_file,
+                    output_file=body_file,
+                    header_file=header_file,
+                    data=payload,
+                    headers=headers,
+                )
+                post_result = subprocess.run(post_cmd, capture_output=True, text=True, timeout=self._timeout + 10)
+                if post_result.returncode != 0:
+                    return "", "", f"签到失败，自动登录请求失败：{post_result.stderr.strip()}"
+
+                status_code, response_headers = self.__parse_curl_response_headers(header_file)
+                text = self.__read_text_file(body_file)
+                logger.info(f"HDHive 自动登录响应状态码: {status_code}")
+                if text:
+                    logger.info(f"HDHive 自动登录响应片段: {re.sub(r'\\s+', ' ', text)[:300]}")
+                logger.info(
+                    f"HDHive 自动登录响应头: x-action-redirect={response_headers.get('x-action-redirect')}, "
+                    f"x-action-revalidated={response_headers.get('x-action-revalidated')}"
+                )
+                set_cookie = response_headers.get("set-cookie") or ""
+                if set_cookie:
+                    logger.info(f"HDHive 自动登录 set-cookie: {set_cookie[:500]}")
+
+                cookie = self.__cookiejar_to_header(cookie_file)
+                logger.info(f"HDHive 自动登录会话Cookie: {self.__cookie_names(cookie)}")
+                if status_code >= 400:
+                    return "", "", f"签到失败，自动登录返回状态码 {status_code}"
+                if "401" in text or "用户名或密码错误" in text or "ç”¨æˆ·åæˆ–å¯†ç é”™è¯¯" in text:
+                    return "", "", "签到失败，HDHive 用户名或密码错误"
+                if status_code not in [200, 303]:
+                    return "", "", f"签到失败，自动登录返回异常状态码 {status_code}"
+
+                home_cmd = self.__build_curl_command(
+                    url=site_url,
+                    cookie_file=cookie_file,
+                    output_file=home_file,
+                )
+                home_result = subprocess.run(home_cmd, capture_output=True, text=True, timeout=self._timeout + 10)
+                if home_result.returncode != 0:
+                    return "", "", f"签到失败，自动登录后访问首页失败：{home_result.stderr.strip()}"
+
+                home_html = self.__read_text_file(home_file)
+                logger.info("HDHive 自动登录后首页状态码: 200")
+                if self.__is_login_page(home_html):
+                    return "", "", "签到失败，自动登录后仍停留在未登录状态"
+
+                if not cookie:
+                    return "", "", "签到失败，自动登录后会话中未提取到 Cookie"
+                logger.info(f"HDHive 自动登录成功，已回填 Cookie，action={action_id[:12]}...")
+                return cookie, home_html, "自动登录成功"
         except Exception as err:
             logger.error(f"HDHive 自动登录失败：{str(err)}")
             return "", "", f"签到失败，自动登录异常：{str(err)}"
+
+    def __build_curl_command(
+        self,
+        url: str,
+        cookie_file: str,
+        output_file: str,
+        header_file: Optional[str] = None,
+        data: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> List[str]:
+        cmd = [
+            "curl",
+            "-s",
+            "-A", self._ua,
+            "-b", cookie_file,
+            "-c", cookie_file,
+            url,
+            "-o", output_file,
+        ]
+        if header_file:
+            cmd.extend(["-D", header_file])
+        if self._proxy and getattr(settings, "PROXY", None):
+            proxy = settings.PROXY
+            if isinstance(proxy, dict):
+                proxy = proxy.get("https") or proxy.get("http")
+            if proxy:
+                cmd.extend(["-x", str(proxy)])
+        if headers:
+            for key, value in headers.items():
+                cmd.extend(["-H", f"{key}: {value}"])
+        if data is not None:
+            cmd.extend(["--data-raw", data])
+        return cmd
+
+    @staticmethod
+    def __read_text_file(path: str) -> str:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        except Exception:
+            return ""
+
+    @staticmethod
+    def __parse_curl_response_headers(path: str) -> Tuple[int, Dict[str, str]]:
+        text = HDHiveSignIn.__read_text_file(path)
+        blocks = [block for block in text.split("\r\n\r\n") if block.strip()]
+        last = blocks[-1] if blocks else text
+        lines = [line for line in last.splitlines() if line.strip()]
+        status = 0
+        headers: Dict[str, str] = {}
+        if lines and lines[0].startswith("HTTP/"):
+            parts = lines[0].split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                status = int(parts[1])
+        for line in lines[1:]:
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+        return status, headers
+
+    @staticmethod
+    def __cookiejar_to_header(path: str) -> str:
+        pairs = []
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if not line.strip() or line.startswith("#"):
+                        continue
+                    parts = line.strip().split("\t")
+                    if len(parts) >= 7:
+                        name = parts[5]
+                        value = parts[6]
+                        if name and value:
+                            pairs.append(f"{name}={value}")
+        except Exception:
+            return ""
+        return "; ".join(pairs)
+
+    @staticmethod
+    def __cookie_names(cookie_header: str) -> List[str]:
+        names = []
+        for item in (cookie_header or "").split(";"):
+            item = item.strip()
+            if not item or "=" not in item:
+                continue
+            names.append(item.split("=", 1)[0])
+        return names
 
     def __get_page_source(self, url: str) -> str:
         res = RequestUtils(
