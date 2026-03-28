@@ -3,11 +3,12 @@
     "name": "HDHive 自动签到",
     "description": "独立执行 HDHive 站点签到，支持定时和立即运行。",
     "labels": "站点,签到",
-    "version": "1.16",
+    "version": "1.17",
     "icon": "signin.png",
     "author": "weixiangnan",
     "level": 2,
     "history": {
+      "v1.17": "HDHive 自动登录改为禁止自动跟随重定向，直接捕获 303 响应里的 token set-cookie 后再验证登录态。",
       "v1.16": "增加 HDHive 自动登录 set-cookie 与会话 Cookie 诊断日志，便于判断服务端是否真正下发登录态。",
       "v1.15": "增加 HDHive 自动登录诊断日志，输出登录响应片段和回访首页状态，便于定位自动补 Cookie 失败原因。",
       "v1.14": "HDHive 自动登录成功后不再切回 RequestUtils 二次校验首页，直接复用同会话已确认的登录态页面。",
