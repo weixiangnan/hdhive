@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.21"
+    plugin_version = "1.22"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -849,6 +849,7 @@ class HDHiveSignIn(_PluginBase):
         cmd = [
             "curl",
             "-s",
+            "--http2",
             "--compressed",
             "-A", self._ua,
             "-b", cookie_file,
