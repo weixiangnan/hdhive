@@ -22,7 +22,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.15"
+    plugin_version = "1.16"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -767,6 +767,10 @@ class HDHiveSignIn(_PluginBase):
             logger.info(f"HDHive 自动登录响应状态码: {response.status_code}")
             if text:
                 logger.info(f"HDHive 自动登录响应片段: {re.sub(r'\\s+', ' ', text)[:300]}")
+            set_cookie = response.headers.get("set-cookie") or response.headers.get("Set-Cookie") or ""
+            if set_cookie:
+                logger.info(f"HDHive 自动登录 set-cookie: {set_cookie[:500]}")
+            logger.info(f"HDHive 自动登录会话Cookie: {list(session.cookies.keys())}")
             if response.status_code >= 400:
                 return "", "", f"签到失败，自动登录返回状态码 {response.status_code}"
             if "401" in text or "用户名或密码错误" in text or "ç”¨æˆ·åæˆ–å¯†ç é”™è¯¯" in text:
