@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.19"
+    plugin_version = "1.20"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -766,12 +766,15 @@ class HDHiveSignIn(_PluginBase):
                     "next-action": action_id,
                     "next-router-state-tree": self.__build_login_router_state_tree(),
                     "DNT": "1",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br, zstd",
                     "Sec-Fetch-Dest": "empty",
                     "Sec-Fetch-Mode": "cors",
                     "Sec-Fetch-Site": "same-origin",
                     "sec-ch-ua": "\"Chromium\";v=\"146\", \"Not-A.Brand\";v=\"24\", \"Google Chrome\";v=\"146\"",
                     "sec-ch-ua-mobile": "?0",
                     "sec-ch-ua-platform": "\"macOS\"",
+                    "priority": "u=1, i",
                 }
                 payload = json.dumps([{
                     "username": self._username,
