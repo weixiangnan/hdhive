@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.22"
+    plugin_version = "1.23"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -808,6 +808,8 @@ class HDHiveSignIn(_PluginBase):
 
                 cookie = self.__cookiejar_to_header(cookie_file)
                 logger.info(f"HDHive 自动登录会话Cookie: {self.__cookie_names(cookie)}")
+                if status_code == 403 and self.__looks_like_cloudflare_block(text, response_headers):
+                    return "", "", "签到失败，当前运行环境被 Cloudflare 拦截，HDHive 无法自动登录，请手动更新 Cookie 或更换代理/出口"
                 if status_code >= 400:
                     return "", "", f"签到失败，自动登录返回状态码 {status_code}"
                 if "401" in text or "用户名或密码错误" in text or "ç”¨æˆ·åæˆ–å¯†ç é”™è¯¯" in text:
@@ -926,6 +928,20 @@ class HDHiveSignIn(_PluginBase):
                 continue
             names.append(item.split("=", 1)[0])
         return names
+
+    @staticmethod
+    def __looks_like_cloudflare_block(body: str, headers: Dict[str, str]) -> bool:
+        text = (body or "").lower()
+        header_text = " ".join(f"{k}:{v}" for k, v in (headers or {}).items()).lower()
+        return any(token in text or token in header_text for token in [
+            "cloudflare",
+            "just a moment",
+            "cf-ray",
+            "cf-cache-status",
+            "cf-mitigated",
+            "attention required",
+            "challenge",
+        ])
 
     def __get_page_source(self, url: str) -> str:
         res = RequestUtils(
