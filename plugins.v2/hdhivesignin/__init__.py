@@ -22,7 +22,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.13"
+    plugin_version = "1.14"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -713,20 +713,19 @@ class HDHiveSignIn(_PluginBase):
                 return "", "签到失败，Cookie已失效，且未配置用户名/密码自动登录"
             return "", "签到失败，未配置 Cookie，且未配置用户名/密码自动登录"
 
-        cookie, message = self.__login_and_get_cookie(site_url)
+        cookie, home_html, message = self.__login_and_get_cookie(site_url)
         if not cookie:
             return "", message or "签到失败，自动登录失败"
 
         self._cookie = cookie
         self.__update_config()
-        home_html = self.__get_page_source(site_url)
         if not home_html:
             return "", "签到失败，自动登录后无法访问站点首页"
         if self.__is_login_page(home_html):
             return "", "签到失败，自动登录后仍未进入登录状态"
         return home_html, "自动登录成功"
 
-    def __login_and_get_cookie(self, site_url: str) -> Tuple[str, str]:
+    def __login_and_get_cookie(self, site_url: str) -> Tuple[str, str, str]:
         try:
             login_url = self.__join_url(site_url, "login")
             session = requests.Session()
@@ -738,11 +737,11 @@ class HDHiveSignIn(_PluginBase):
             )
             login_html = login_page.text or ""
             if not login_html:
-                return "", "签到失败，自动登录前无法打开 HDHive 登录页"
+                return "", "", "签到失败，自动登录前无法打开 HDHive 登录页"
 
             action_id = self.__extract_server_action_id(login_html, site_url, action_name="login")
             if not action_id:
-                return "", "签到失败，未提取到 HDHive 登录 action"
+                return "", "", "签到失败，未提取到 HDHive 登录 action"
 
             headers = {
                 "Accept": "text/x-component",
@@ -766,9 +765,9 @@ class HDHiveSignIn(_PluginBase):
             )
             text = response.text or ""
             if response.status_code >= 400:
-                return "", f"签到失败，自动登录返回状态码 {response.status_code}"
+                return "", "", f"签到失败，自动登录返回状态码 {response.status_code}"
             if "401" in text or "用户名或密码错误" in text or "ç”¨æˆ·åæˆ–å¯†ç é”™è¯¯" in text:
-                return "", "签到失败，HDHive 用户名或密码错误"
+                return "", "", "签到失败，HDHive 用户名或密码错误"
 
             home_response = session.get(
                 site_url,
@@ -777,16 +776,16 @@ class HDHiveSignIn(_PluginBase):
             )
             home_html = home_response.text or ""
             if self.__is_login_page(home_html):
-                return "", "签到失败，自动登录后仍停留在未登录状态"
+                return "", "", "签到失败，自动登录后仍停留在未登录状态"
 
             cookie = "; ".join(f"{c.name}={c.value}" for c in session.cookies if c.value)
             if not cookie:
-                return "", "签到失败，自动登录后会话中未提取到 Cookie"
+                return "", "", "签到失败，自动登录后会话中未提取到 Cookie"
             logger.info(f"HDHive 自动登录成功，已回填 Cookie，action={action_id[:12]}...")
-            return cookie, "自动登录成功"
+            return cookie, home_html, "自动登录成功"
         except Exception as err:
             logger.error(f"HDHive 自动登录失败：{str(err)}")
-            return "", f"签到失败，自动登录异常：{str(err)}"
+            return "", "", f"签到失败，自动登录异常：{str(err)}"
 
     def __get_page_source(self, url: str) -> str:
         res = RequestUtils(
