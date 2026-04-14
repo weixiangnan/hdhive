@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.24"
+    plugin_version = "1.25"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -70,6 +70,7 @@ class HDHiveSignIn(_PluginBase):
     ]
     _default_sign_pages = ["", "tv"]
     _cached_action_data_key = "cached_server_actions"
+    _valid_server_action_marker = "__HDHIVE_VALID_SERVER_ACTION__"
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -616,6 +617,13 @@ class HDHiveSignIn(_PluginBase):
             self.__save_history(False, message)
             return False, message
 
+        signed_today, signed_message = self.__get_points_log_sign_status(site_url)
+        if signed_today is True:
+            message = signed_message or "今日已签到"
+            logger.info(message)
+            self.__save_history(True, message)
+            return True, message
+
         if self.__match_regex(home_html, self.__repeat_patterns()):
             message = "今日已签到"
             logger.info(message)
@@ -624,6 +632,12 @@ class HDHiveSignIn(_PluginBase):
 
         candidates = []
         candidates.extend(self.__discover_signin_candidates(site_url))
+        signed_today, signed_message = self.__get_points_log_sign_status(site_url)
+        if signed_today is True:
+            message = signed_message or "签到成功"
+            logger.info(message)
+            self.__save_history(True, message)
+            return True, message
 
         if self._sign_path:
             candidates.append((
@@ -645,6 +659,13 @@ class HDHiveSignIn(_PluginBase):
             if ok:
                 self.__save_history(True, message)
                 return True, message
+            if message == self._valid_server_action_marker:
+                verified, verified_message = self.__confirm_signin_by_points_log(site_url)
+                if verified:
+                    logger.info(f"HDHive 签到成功，接口：{url}")
+                    self.__save_history(True, verified_message)
+                    return True, verified_message
+                message = f"接口 {url} 返回新版 Server Action 响应，但积分记录未更新"
             if message == "签到失败，Cookie已失效":
                 self.__save_history(False, message)
                 return False, message
@@ -702,6 +723,9 @@ class HDHiveSignIn(_PluginBase):
             if self.__match_regex(text, self.__success_patterns()):
                 logger.info(f"HDHive 签到成功，接口：{url}")
                 return True, "签到成功"
+            if self.__looks_like_rsc_flight(text):
+                logger.info(f"HDHive 命中新版 Server Action 响应，接口：{url}")
+                return False, self._valid_server_action_marker
             snippet = re.sub(r"\s+", " ", text)[:200]
             return False, f"接口 {url} 返回：{snippet}"
         except Exception as err:
@@ -1131,6 +1155,12 @@ class HDHiveSignIn(_PluginBase):
                 return action_id
             if message == "签到失败，Cookie已失效":
                 return None
+            if message == self._valid_server_action_marker:
+                verified, _ = self.__confirm_signin_by_points_log(site_url)
+                if verified:
+                    logger.info(f"HDHive 候选探测命中新版 checkIn action: {action_id[:12]}...")
+                    return action_id
+                continue
             if message == "Server action not found.":
                 continue
         return None
@@ -1216,6 +1246,40 @@ class HDHiveSignIn(_PluginBase):
         except Exception as err:
             logger.warning(f"HDHive 获取页面资源失败：{url}，原因：{str(err)}")
             return ""
+
+    def __get_points_log_sign_status(self, site_url: str) -> Tuple[Optional[bool], str]:
+        points_url = self.__join_url(site_url, "manager/points-logs")
+        html = self.__get_page_source(points_url)
+        if not html:
+            return None, ""
+        if self.__is_login_page(html):
+            return None, "签到失败，Cookie已失效"
+
+        # 积分记录页按时间倒序展示，取首条签到记录即可判断当日状态。
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"\s+", " ", text)
+        match = re.search(
+            r"(签到成功，获得\s*\d+\s*积分)\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})",
+            text,
+        )
+        if not match:
+            return False, ""
+
+        message = re.sub(r"\s+", "", match.group(1))
+        timestamp = match.group(2)
+        today = datetime.now(tz=pytz.timezone(settings.TZ)).strftime("%Y-%m-%d")
+        if timestamp.startswith(today):
+            return True, message
+        return False, message
+
+    def __confirm_signin_by_points_log(self, site_url: str, retries: int = 2, delay: float = 1.0) -> Tuple[bool, str]:
+        for attempt in range(retries):
+            signed_today, message = self.__get_points_log_sign_status(site_url)
+            if signed_today is True:
+                return True, message or "签到成功"
+            if attempt < retries - 1:
+                time.sleep(delay)
+        return False, ""
 
     @staticmethod
     def __build_next_router_state_tree(page_name: str) -> str:
@@ -1333,6 +1397,13 @@ class HDHiveSignIn(_PluginBase):
             if isinstance(value, str) and value.lower() in ["ok", "success", "true", "1"]:
                 return True
         return False
+
+    @staticmethod
+    def __looks_like_rsc_flight(text: str) -> bool:
+        normalized = (text or "").strip()
+        if not normalized:
+            return False
+        return bool(re.match(r'^\d+:(\{|\")', normalized)) and "\"b\":" in normalized
 
     def __parse_server_action_result(self, text: str) -> Optional[Tuple[bool, str]]:
         for line in text.splitlines():

@@ -8,6 +8,7 @@
     "author": "weixiangnan",
     "level": 2,
     "history": {
+      "v1.25": "HDHive 签到新增积分记录后置校验与新版 RSC Server Action 响应识别，兼容站点隐藏 checkIn 标识后仍可通过候选探测命中真实签到 action。",
       "v1.24": "HDHive 动态提取 checkIn action 失败时，新增缓存复用与候选 action 探测兜底，兼容站点前端改版后 create/registerServerReference 失配场景。",
       "v1.23": "HDHive 自动登录新增 Cloudflare/403 环境拦截识别，失败时直接提示手动更新 Cookie 或更换出口。",
       "v1.22": "HDHive 自动登录 curl 请求补充 --http2，修复与浏览器成功登录链路的关键协议差异。",
