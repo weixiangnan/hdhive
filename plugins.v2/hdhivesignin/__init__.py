@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.25"
+    plugin_version = "1.26"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -71,6 +71,18 @@ class HDHiveSignIn(_PluginBase):
     _default_sign_pages = ["", "tv"]
     _cached_action_data_key = "cached_server_actions"
     _valid_server_action_marker = "__HDHIVE_VALID_SERVER_ACTION__"
+    _observed_server_actions = {
+        "/": [
+            "402b7e1f30165a6ded288e0043f2dbb11db4a998a1",
+            "405f0ab232fa844d7038944a5a0928f8a696add970",
+            "40efbc107064",
+        ],
+        "tv": [
+            "402b7e1f30165a6ded288e0043f2dbb11db4a998a1",
+            "405f0ab232fa844d7038944a5a0928f8a696add970",
+            "40efbc107064",
+        ],
+    }
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -1007,6 +1019,10 @@ class HDHiveSignIn(_PluginBase):
             "name=\"username\"",
             "NEXT_REDIRECT;replace;/login",
             "/login?redirect=",
+            "登录您的账号",
+            "Login Now",
+            "忘记密码",
+            "还没有账号？马上注册账号",
         ])
 
     @staticmethod
@@ -1110,6 +1126,11 @@ class HDHiveSignIn(_PluginBase):
         if probed_action:
             self.__save_cached_server_action(page_name, probed_action)
             candidates.append(("候选探测", probed_action))
+            return candidates
+
+        for action_id in self._observed_server_actions.get(page_name or "/", []):
+            if action_id not in [item[1] for item in candidates]:
+                candidates.append(("内置兜底", action_id))
         return candidates
 
     def __probe_server_action_id(self, html: str, site_url: str, page_name: str) -> Optional[str]:
@@ -1173,7 +1194,7 @@ class HDHiveSignIn(_PluginBase):
     def __extract_hex_candidates(text: str, excluded: Optional[set] = None) -> List[str]:
         excluded = excluded or set()
         candidates = []
-        for match in re.findall(r"\b[0-9a-f]{12,40}\b", text or "", flags=re.IGNORECASE):
+        for match in re.findall(r"\b[0-9a-f]{12,64}\b", text or "", flags=re.IGNORECASE):
             value = match.lower()
             if value in excluded:
                 continue
