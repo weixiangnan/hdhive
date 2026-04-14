@@ -3,11 +3,12 @@
     "name": "HDHive 自动签到",
     "description": "独立执行 HDHive 站点签到，支持定时和立即运行。",
     "labels": "站点,签到",
-    "version": "1.23",
+    "version": "1.24",
     "icon": "signin.png",
     "author": "weixiangnan",
     "level": 2,
     "history": {
+      "v1.24": "HDHive 动态提取 checkIn action 失败时，新增缓存复用与候选 action 探测兜底，兼容站点前端改版后 create/registerServerReference 失配场景。",
       "v1.23": "HDHive 自动登录新增 Cloudflare/403 环境拦截识别，失败时直接提示手动更新 Cookie 或更换出口。",
       "v1.22": "HDHive 自动登录 curl 请求补充 --http2，修复与浏览器成功登录链路的关键协议差异。",
       "v1.21": "HDHive 自动登录 curl 请求启用压缩解码，便于读取真实响应内容并继续逼近浏览器成功登录链路。",

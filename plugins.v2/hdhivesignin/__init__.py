@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.23"
+    plugin_version = "1.24"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -69,6 +69,7 @@ class HDHiveSignIn(_PluginBase):
         r"\"success\":true",
     ]
     _default_sign_pages = ["", "tv"]
+    _cached_action_data_key = "cached_server_actions"
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -682,6 +683,8 @@ class HDHiveSignIn(_PluginBase):
                 return False, ""
             if self.__is_login_page(text):
                 return False, "签到失败，Cookie已失效"
+            if text == "Server action not found.":
+                return False, text
             server_action_result = self.__parse_server_action_result(text)
             if server_action_result:
                 return server_action_result
@@ -1024,39 +1027,152 @@ class HDHiveSignIn(_PluginBase):
 
     def __discover_signin_candidates(self, site_url: str) -> List[Tuple[str, str, Any, Dict[str, str]]]:
         candidates = []
+        seen_actions = set()
         for page_name in self._default_sign_pages:
             page_url = self.__join_url(site_url, page_name)
             html = self.__get_page_source(page_url)
             if not html or self.__is_login_page(html):
                 continue
 
-            action_id = self.__extract_server_action_id(html, site_url, action_name="checkIn")
-            if not action_id:
-                continue
-
-            dynamic_headers = {
-                "Accept": "text/x-component",
-                "Content-Type": "text/plain;charset=UTF-8",
-                "Origin": site_url.rstrip("/"),
-                "Referer": page_url,
-                "next-action": action_id,
-                "next-router-state-tree": self.__build_next_router_state_tree(page_name),
-            }
-            dynamic_headers.update(self.__request_headers())
-            logger.info(
-                f"HDHive 已动态提取 {page_url} 的 checkIn action: {action_id[:12]}..."
-            )
-            candidates.append(("post", page_url, [False], dynamic_headers))
+            for source, action_id in self.__collect_server_action_candidates(
+                html=html,
+                site_url=site_url,
+                page_name=page_name,
+                action_name="checkIn",
+            ):
+                dedupe_key = f"{page_name}:{action_id}"
+                if dedupe_key in seen_actions:
+                    continue
+                seen_actions.add(dedupe_key)
+                dynamic_headers = self.__build_server_action_headers(
+                    site_url=site_url,
+                    page_url=page_url,
+                    page_name=page_name,
+                    action_id=action_id,
+                )
+                logger.info(
+                    f"HDHive 已{source} {page_url} 的 checkIn action: {action_id[:12]}..."
+                )
+                candidates.append(("post", page_url, [False], dynamic_headers))
 
         if not candidates:
             logger.warning("HDHive 动态提取 checkIn action 失败，将回退到静态候选接口")
         return candidates
 
+    def __collect_server_action_candidates(
+        self,
+        html: str,
+        site_url: str,
+        page_name: str,
+        action_name: str,
+    ) -> List[Tuple[str, str]]:
+        candidates: List[Tuple[str, str]] = []
+        cached_actions = self.__load_cached_server_actions()
+        cached_action = cached_actions.get(page_name or "/")
+        if cached_action:
+            candidates.append(("缓存复用", cached_action))
+
+        action_id = self.__extract_server_action_id(html, site_url, action_name=action_name)
+        if action_id:
+            self.__save_cached_server_action(page_name, action_id)
+            candidates.append(("动态提取", action_id))
+            return candidates
+
+        probed_action = self.__probe_server_action_id(
+            html=html,
+            site_url=site_url,
+            page_name=page_name,
+        )
+        if probed_action:
+            self.__save_cached_server_action(page_name, probed_action)
+            candidates.append(("候选探测", probed_action))
+        return candidates
+
+    def __probe_server_action_id(self, html: str, site_url: str, page_name: str) -> Optional[str]:
+        chunk_paths = self.__extract_chunk_paths(html)
+        chunk_hashes = {
+            match.group(1)
+            for path in chunk_paths
+            for match in [re.search(r"/([0-9a-f]{8,40})[^/]*\\.js$", path)]
+            if match
+        }
+        candidate_ids = self.__extract_hex_candidates(html, chunk_hashes)
+        for chunk_path in chunk_paths:
+            chunk_url = self.__join_url(site_url, chunk_path)
+            chunk_js = self.__fetch_text(chunk_url)
+            if not chunk_js:
+                continue
+            candidate_ids.extend(self.__extract_hex_candidates(chunk_js, chunk_hashes))
+
+        page_url = self.__join_url(site_url, page_name)
+        deduped: List[str] = []
+        for action_id in candidate_ids:
+            if action_id not in deduped:
+                deduped.append(action_id)
+
+        # 控制探测开销，优先尝试更像 Next Server Action 的短 hex 值
+        deduped.sort(key=lambda item: (len(item) > 16, len(item), item))
+        probe_limit = 40
+        for action_id in deduped[:probe_limit]:
+            headers = self.__build_server_action_headers(
+                site_url=site_url,
+                page_url=page_url,
+                page_name=page_name,
+                action_id=action_id,
+            )
+            ok, message = self.__try_sign(
+                url=page_url,
+                method="post",
+                data=[False],
+                headers=headers,
+            )
+            if ok:
+                logger.info(f"HDHive 候选探测命中 checkIn action: {action_id[:12]}...")
+                return action_id
+            if message == "签到失败，Cookie已失效":
+                return None
+            if message == "Server action not found.":
+                continue
+        return None
+
+    @staticmethod
+    def __extract_chunk_paths(html: str) -> List[str]:
+        return sorted(set(re.findall(r'/_next/static/chunks/[^"\s]+\.js', html or "")))
+
+    @staticmethod
+    def __extract_hex_candidates(text: str, excluded: Optional[set] = None) -> List[str]:
+        excluded = excluded or set()
+        candidates = []
+        for match in re.findall(r"\b[0-9a-f]{12,40}\b", text or "", flags=re.IGNORECASE):
+            value = match.lower()
+            if value in excluded:
+                continue
+            candidates.append(value)
+        return candidates
+
+    def __build_server_action_headers(
+        self,
+        site_url: str,
+        page_url: str,
+        page_name: str,
+        action_id: str,
+    ) -> Dict[str, str]:
+        headers = {
+            "Accept": "text/x-component",
+            "Content-Type": "text/plain;charset=UTF-8",
+            "Origin": site_url.rstrip("/"),
+            "Referer": page_url,
+            "next-action": action_id,
+            "next-router-state-tree": self.__build_next_router_state_tree(page_name),
+        }
+        headers.update(self.__request_headers())
+        return headers
+
     def __extract_server_action_id(self, html: str, site_url: str, action_name: str) -> Optional[str]:
-        chunk_paths = sorted(set(re.findall(r'/_next/static/chunks/[^"\s]+\.js', html or "")))
+        chunk_paths = self.__extract_chunk_paths(html)
         logger.info(f"HDHive 动态提取发现 chunk 数量: {len(chunk_paths)}")
         action_pattern = re.compile(
-            rf'createServerReference\)?\("([0-9a-f]+)".*?"{re.escape(action_name)}"\)',
+            rf'(?:createServerReference|registerServerReference)\)?\(\s*"([0-9a-f]+)".*?"{re.escape(action_name)}"',
             re.IGNORECASE | re.DOTALL,
         )
         for chunk_path in chunk_paths:
@@ -1070,6 +1186,21 @@ class HDHiveSignIn(_PluginBase):
         if chunk_paths:
             logger.warning(f"HDHive 未在 chunk 中匹配到 {action_name}，首个 chunk: {chunk_paths[0]}")
         return None
+
+    def __load_cached_server_actions(self) -> Dict[str, str]:
+        data = self.get_data(self._cached_action_data_key) or {}
+        if isinstance(data, dict):
+            return {
+                (str(key) if str(key) != "/" else "/"): str(value)
+                for key, value in data.items()
+                if key is not None and value
+            }
+        return {}
+
+    def __save_cached_server_action(self, page_name: str, action_id: str):
+        data = self.__load_cached_server_actions()
+        data[page_name or "/"] = action_id
+        self.save_data(self._cached_action_data_key, data)
 
     def __fetch_text(self, url: str) -> str:
         try:
