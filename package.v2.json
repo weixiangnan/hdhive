@@ -3,11 +3,12 @@
     "name": "HDHive 自动签到",
     "description": "独立执行 HDHive 站点签到，支持定时和立即运行。",
     "labels": "站点,签到",
-    "version": "1.26",
+    "version": "1.27",
     "icon": "signin.png",
     "author": "weixiangnan",
     "level": 2,
     "history": {
+      "v1.27": "HDHive 签到兼容新版嵌套 Server Action 响应与错位编码中文提示，并更新当前线上签到 action 兜底。",
       "v1.26": "HDHive 签到新增当前站点内置 Server Action 兜底、新登录页识别与更长 action id 支持，兼容影巢签到入口升级后无法从 chunk 直接匹配 checkIn 的场景。",
       "v1.25": "HDHive 签到新增积分记录后置校验与新版 RSC Server Action 响应识别，兼容站点隐藏 checkIn 标识后仍可通过候选探测命中真实签到 action。",
       "v1.24": "HDHive 动态提取 checkIn action 失败时，新增缓存复用与候选 action 探测兜底，兼容站点前端改版后 create/registerServerReference 失配场景。",

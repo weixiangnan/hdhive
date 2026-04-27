@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.26"
+    plugin_version = "1.27"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -73,11 +73,13 @@ class HDHiveSignIn(_PluginBase):
     _valid_server_action_marker = "__HDHIVE_VALID_SERVER_ACTION__"
     _observed_server_actions = {
         "/": [
+            "4093f822cf4bb910762e4214c2d594bdc0c6ba6232",
             "402b7e1f30165a6ded288e0043f2dbb11db4a998a1",
             "405f0ab232fa844d7038944a5a0928f8a696add970",
             "40efbc107064",
         ],
         "tv": [
+            "4093f822cf4bb910762e4214c2d594bdc0c6ba6232",
             "402b7e1f30165a6ded288e0043f2dbb11db4a998a1",
             "405f0ab232fa844d7038944a5a0928f8a696add970",
             "40efbc107064",
@@ -1437,49 +1439,85 @@ class HDHiveSignIn(_PluginBase):
             except Exception:
                 continue
 
-            error = payload.get("error")
-            if isinstance(error, dict):
-                description = str(error.get("description") or "")
-                message = str(error.get("message") or "")
-                code = str(error.get("code") or "")
-                merged = f"{message} {description} {code}"
+            for item in self.__server_action_payloads(payload):
+                merged = " ".join(self.__flatten_string_values(item))
                 if self.__looks_like_repeat_message(merged):
                     logger.info("HDHive 今日已签到")
                     return True, "今日已签到"
                 if self.__looks_like_success_message(merged):
                     logger.info("HDHive 签到成功")
                     return True, "签到成功"
-
-            if self.__json_is_success(payload):
-                logger.info("HDHive 签到成功")
-                return True, "签到成功"
+                if isinstance(item, dict) and self.__json_is_success(item):
+                    logger.info("HDHive 签到成功")
+                    return True, "签到成功"
         return None
 
     @staticmethod
+    def __server_action_payloads(payload: Dict) -> List[Any]:
+        payloads: List[Any] = [payload]
+        if isinstance(payload, dict):
+            for key in ["response", "data", "result", "error"]:
+                value = payload.get(key)
+                if isinstance(value, (dict, list)):
+                    payloads.append(value)
+        return payloads
+
+    @classmethod
+    def __flatten_string_values(cls, value: Any) -> List[str]:
+        values: List[str] = []
+        if isinstance(value, dict):
+            for item in value.values():
+                values.extend(cls.__flatten_string_values(item))
+        elif isinstance(value, list):
+            for item in value:
+                values.extend(cls.__flatten_string_values(item))
+        elif value is not None:
+            values.append(str(value))
+        return values
+
+    @staticmethod
+    def __text_variants(text: str) -> List[str]:
+        raw = str(text or "")
+        variants = [raw]
+        try:
+            decoded = raw.encode("latin1").decode("utf-8")
+            if decoded and decoded != raw:
+                variants.append(decoded)
+        except Exception:
+            pass
+        return variants
+
+    @staticmethod
     def __looks_like_repeat_message(text: str) -> bool:
-        lowered = (text or "").lower()
-        return any(token in lowered for token in [
-            "已经签到",
-            "今日已签到",
-            "明天再来",
-            "already signed",
-            "already checked",
-            "code 400",
-            "\"code\":\"400\"",
-            "success\":false",
-            "ç­¾å°å¤±è´¥",
-            "ä½ å·²ç»ç­¾å°è¿äº",
-        ])
+        return any(
+            token in variant.lower()
+            for variant in HDHiveSignIn.__text_variants(text)
+            for token in [
+                "已经签到",
+                "今日已签到",
+                "明天再来",
+                "already signed",
+                "already checked",
+                "code 400",
+                "\"code\":\"400\"",
+                "success\":false",
+                "ç­¾å°å¤±è´¥",
+                "ä½ å·²ç»ç­¾å°è¿äº",
+            ]
+        )
 
     @staticmethod
     def __looks_like_success_message(text: str) -> bool:
-        lowered = (text or "").lower()
-        return any(token in lowered for token in [
-            "签到成功",
-            "sign success",
-            "checkin success",
-            "\"success\":true",
-        ])
+        return any(
+            token in variant.lower()
+            for variant in HDHiveSignIn.__text_variants(text)
+            for token in [
+                "签到成功",
+                "sign success",
+                "checkin success",
+                "\"success\":true",
+            ]
+        )
 
     @staticmethod
     def __match_regex(text: str, patterns: List[str]) -> bool:
