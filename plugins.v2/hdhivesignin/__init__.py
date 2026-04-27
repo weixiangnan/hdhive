@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.29"
+    plugin_version = "1.30"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -751,6 +751,10 @@ class HDHiveSignIn(_PluginBase):
             home_html = self.__get_page_source(site_url)
             if home_html and not self.__is_login_page(home_html):
                 return home_html, ""
+            if home_html and self.__has_auth_cookie_pair():
+                logger.warning("HDHive 首页疑似登录页，但 Cookie 包含 token/refresh_token，将继续尝试后续签到校验")
+                self.__log_login_state_diagnostics(home_html)
+                return home_html, ""
             self.__log_invalid_cookie_diagnostics(home_html)
 
         if not self._username or not self._password:
@@ -770,12 +774,24 @@ class HDHiveSignIn(_PluginBase):
             return "", "签到失败，自动登录后仍未进入登录状态"
         return home_html, "自动登录成功"
 
+    def __has_auth_cookie_pair(self) -> bool:
+        names = set(self.__cookie_names(self._cookie))
+        return "token" in names and "refresh_token" in names
+
     def __log_invalid_cookie_diagnostics(self, home_html: str):
         cookie_names = self.__cookie_names(self._cookie)
         logger.warning(f"HDHive 登录态校验失败，插件当前 Cookie 字段: {cookie_names}")
+        self.__log_login_state_diagnostics(home_html)
+
+    def __log_login_state_diagnostics(self, home_html: str):
         if home_html:
             snippet = re.sub(r"\s+", " ", home_html)[:300]
-            logger.warning(f"HDHive 登录态校验失败首页片段: {snippet}")
+            logger.warning(f"HDHive 登录态校验首页片段: {snippet}")
+            logger.warning(
+                "HDHive 登录态校验命中: "
+                f"logged_in={self.__is_logged_in_page(home_html)}, "
+                f"login_markers={self.__login_page_marker_hits(home_html)}"
+            )
         else:
             logger.warning("HDHive 登录态校验失败，首页无响应或响应为空")
 
@@ -1029,7 +1045,12 @@ class HDHiveSignIn(_PluginBase):
         page = text or ""
         if HDHiveSignIn.__is_logged_in_page(page):
             return False
-        return any(marker in page for marker in [
+        return bool(HDHiveSignIn.__login_page_marker_hits(page))
+
+    @staticmethod
+    def __login_page_marker_hits(text: str) -> List[str]:
+        page = text or ""
+        markers = [
             "login.php",
             "name=\"username\"",
             "NEXT_REDIRECT;replace;/login",
@@ -1038,7 +1059,8 @@ class HDHiveSignIn(_PluginBase):
             "Login Now",
             "忘记密码",
             "还没有账号？马上注册账号",
-        ])
+        ]
+        return [marker for marker in markers if marker in page]
 
     @staticmethod
     def __is_logged_in_page(text: str) -> bool:
