@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.28"
+    plugin_version = "1.29"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -1026,7 +1026,10 @@ class HDHiveSignIn(_PluginBase):
 
     @staticmethod
     def __is_login_page(text: str) -> bool:
-        return any(marker in (text or "") for marker in [
+        page = text or ""
+        if HDHiveSignIn.__is_logged_in_page(page):
+            return False
+        return any(marker in page for marker in [
             "login.php",
             "name=\"username\"",
             "NEXT_REDIRECT;replace;/login",
@@ -1035,6 +1038,20 @@ class HDHiveSignIn(_PluginBase):
             "Login Now",
             "忘记密码",
             "还没有账号？马上注册账号",
+        ])
+
+    @staticmethod
+    def __is_logged_in_page(text: str) -> bool:
+        page = text or ""
+        if re.search(r'"currentUser"\s*:\s*\{', page):
+            return True
+        if re.search(r'currentUser["\']?\s*[:=]\s*(?!null)', page):
+            return True
+        return any(marker in page for marker in [
+            "/manager/account",
+            "\"is_admin\"",
+            "\"is_vip\"",
+            "用户菜单",
         ])
 
     @staticmethod
