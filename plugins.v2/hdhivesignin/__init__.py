@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.27"
+    plugin_version = "1.28"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -751,6 +751,7 @@ class HDHiveSignIn(_PluginBase):
             home_html = self.__get_page_source(site_url)
             if home_html and not self.__is_login_page(home_html):
                 return home_html, ""
+            self.__log_invalid_cookie_diagnostics(home_html)
 
         if not self._username or not self._password:
             if self._cookie:
@@ -768,6 +769,15 @@ class HDHiveSignIn(_PluginBase):
         if self.__is_login_page(home_html):
             return "", "签到失败，自动登录后仍未进入登录状态"
         return home_html, "自动登录成功"
+
+    def __log_invalid_cookie_diagnostics(self, home_html: str):
+        cookie_names = self.__cookie_names(self._cookie)
+        logger.warning(f"HDHive 登录态校验失败，插件当前 Cookie 字段: {cookie_names}")
+        if home_html:
+            snippet = re.sub(r"\s+", " ", home_html)[:300]
+            logger.warning(f"HDHive 登录态校验失败首页片段: {snippet}")
+        else:
+            logger.warning("HDHive 登录态校验失败，首页无响应或响应为空")
 
     def __login_and_get_cookie(self, site_url: str) -> Tuple[str, str, str]:
         try:
