@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.30"
+    plugin_version = "1.31"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -625,11 +625,13 @@ class HDHiveSignIn(_PluginBase):
             self.__save_history(False, message)
             return False, message
 
-        if self.__is_login_page(home_html):
+        if self.__is_blocking_login_page(home_html):
             message = "签到失败，Cookie已失效"
             logger.error(message)
             self.__save_history(False, message)
             return False, message
+        if self.__is_login_page(home_html):
+            logger.warning("HDHive 首页返回登录跳转，但 Cookie 含 token/refresh_token，继续尝试签到接口")
 
         signed_today, signed_message = self.__get_points_log_sign_status(site_url)
         if signed_today is True:
@@ -716,8 +718,10 @@ class HDHiveSignIn(_PluginBase):
             text = (res.text or "").strip()
             if not text:
                 return False, ""
-            if self.__is_login_page(text):
+            if self.__is_blocking_login_page(text):
                 return False, "签到失败，Cookie已失效"
+            if self.__is_login_page(text):
+                return False, "接口返回登录跳转，但 Cookie 含 token/refresh_token，已跳过阻断"
             if text == "Server action not found.":
                 return False, text
             server_action_result = self.__parse_server_action_result(text)
@@ -770,13 +774,16 @@ class HDHiveSignIn(_PluginBase):
         self.__update_config()
         if not home_html:
             return "", "签到失败，自动登录后无法访问站点首页"
-        if self.__is_login_page(home_html):
+        if self.__is_blocking_login_page(home_html):
             return "", "签到失败，自动登录后仍未进入登录状态"
         return home_html, "自动登录成功"
 
     def __has_auth_cookie_pair(self) -> bool:
         names = set(self.__cookie_names(self._cookie))
         return "token" in names and "refresh_token" in names
+
+    def __is_blocking_login_page(self, text: str) -> bool:
+        return self.__is_login_page(text) and not self.__has_auth_cookie_pair()
 
     def __log_invalid_cookie_diagnostics(self, home_html: str):
         cookie_names = self.__cookie_names(self._cookie)
@@ -1122,8 +1129,10 @@ class HDHiveSignIn(_PluginBase):
         for page_name in self._default_sign_pages:
             page_url = self.__join_url(site_url, page_name)
             html = self.__get_page_source(page_url)
-            if not html or self.__is_login_page(html):
+            if not html or self.__is_blocking_login_page(html):
                 continue
+            if self.__is_login_page(html):
+                logger.warning(f"HDHive {page_url} 返回登录跳转，但 Cookie 含 token/refresh_token，继续提取签到 action")
 
             for source, action_id in self.__collect_server_action_candidates(
                 html=html,
@@ -1324,8 +1333,11 @@ class HDHiveSignIn(_PluginBase):
         html = self.__get_page_source(points_url)
         if not html:
             return None, ""
-        if self.__is_login_page(html):
+        if self.__is_blocking_login_page(html):
             return None, "签到失败，Cookie已失效"
+        if self.__is_login_page(html):
+            logger.warning("HDHive 积分页返回登录跳转，但 Cookie 含 token/refresh_token，跳过积分页预校验")
+            return None, ""
 
         # 积分记录页按时间倒序展示，取首条签到记录即可判断当日状态。
         text = re.sub(r"<[^>]+>", " ", html)
