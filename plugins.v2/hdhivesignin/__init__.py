@@ -25,7 +25,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.31"
+    plugin_version = "1.32"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -624,6 +624,11 @@ class HDHiveSignIn(_PluginBase):
             logger.error(message)
             self.__save_history(False, message)
             return False, message
+        maintenance_message = self.__maintenance_message(home_html)
+        if maintenance_message:
+            logger.warning(maintenance_message)
+            self.__save_history(False, maintenance_message)
+            return False, maintenance_message
 
         if self.__is_blocking_login_page(home_html):
             message = "签到失败，Cookie已失效"
@@ -718,6 +723,9 @@ class HDHiveSignIn(_PluginBase):
             text = (res.text or "").strip()
             if not text:
                 return False, ""
+            maintenance_message = self.__maintenance_message(text)
+            if maintenance_message:
+                return False, maintenance_message
             if self.__is_blocking_login_page(text):
                 return False, "签到失败，Cookie已失效"
             if self.__is_login_page(text):
@@ -1070,6 +1078,18 @@ class HDHiveSignIn(_PluginBase):
         return [marker for marker in markers if marker in page]
 
     @staticmethod
+    def __maintenance_message(text: str) -> str:
+        page = text or ""
+        if "系统维护中" not in page and "正在维护" not in page:
+            return ""
+        compact = re.sub(r"<[^>]+>", " ", page)
+        compact = re.sub(r"\s+", " ", compact)
+        match = re.search(r"预计完成时间\s*([0-9]{4}年[0-9]{1,2}月[0-9]{1,2}日\s*[0-9]{1,2}:[0-9]{2})", compact)
+        if match:
+            return f"签到失败，HDHive 系统维护中，预计完成时间 {match.group(1)}"
+        return "签到失败，HDHive 系统维护中"
+
+    @staticmethod
     def __is_logged_in_page(text: str) -> bool:
         page = text or ""
         if re.search(r'"currentUser"\s*:\s*\{', page):
@@ -1129,7 +1149,7 @@ class HDHiveSignIn(_PluginBase):
         for page_name in self._default_sign_pages:
             page_url = self.__join_url(site_url, page_name)
             html = self.__get_page_source(page_url)
-            if not html or self.__is_blocking_login_page(html):
+            if not html or self.__maintenance_message(html) or self.__is_blocking_login_page(html):
                 continue
             if self.__is_login_page(html):
                 logger.warning(f"HDHive {page_url} 返回登录跳转，但 Cookie 含 token/refresh_token，继续提取签到 action")
@@ -1333,6 +1353,9 @@ class HDHiveSignIn(_PluginBase):
         html = self.__get_page_source(points_url)
         if not html:
             return None, ""
+        maintenance_message = self.__maintenance_message(html)
+        if maintenance_message:
+            return None, maintenance_message
         if self.__is_blocking_login_page(html):
             return None, "签到失败，Cookie已失效"
         if self.__is_login_page(html):
