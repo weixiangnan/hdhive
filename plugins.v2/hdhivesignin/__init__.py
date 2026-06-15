@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -25,7 +26,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.32"
+    plugin_version = "1.33"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -73,12 +74,14 @@ class HDHiveSignIn(_PluginBase):
     _valid_server_action_marker = "__HDHIVE_VALID_SERVER_ACTION__"
     _observed_server_actions = {
         "/": [
+            "60529bb51b8032da8000e7c2d73b01e276a18422ea",
             "4093f822cf4bb910762e4214c2d594bdc0c6ba6232",
             "402b7e1f30165a6ded288e0043f2dbb11db4a998a1",
             "405f0ab232fa844d7038944a5a0928f8a696add970",
             "40efbc107064",
         ],
         "tv": [
+            "60529bb51b8032da8000e7c2d73b01e276a18422ea",
             "4093f822cf4bb910762e4214c2d594bdc0c6ba6232",
             "402b7e1f30165a6ded288e0043f2dbb11db4a998a1",
             "405f0ab232fa844d7038944a5a0928f8a696add970",
@@ -690,6 +693,9 @@ class HDHiveSignIn(_PluginBase):
             if message == "签到失败，Cookie已失效":
                 self.__save_history(False, message)
                 return False, message
+            if message == "签到失败，HDHive 需要浏览器验证码/Action Token":
+                self.__save_history(False, message)
+                return False, message
             if message:
                 last_detail = message
 
@@ -741,6 +747,9 @@ class HDHiveSignIn(_PluginBase):
                     if self.__json_is_success(payload):
                         logger.info(f"HDHive 签到成功，接口：{url}")
                         return True, "签到成功"
+                    json_error = self.__json_error_message(payload)
+                    if json_error:
+                        return False, json_error
                 except Exception:
                     pass
             if self.__match_regex(text, self.__repeat_patterns()):
@@ -860,7 +869,8 @@ class HDHiveSignIn(_PluginBase):
                 }
                 payload = json.dumps([{
                     "username": self._username,
-                    "password": self._password,
+                    "password": self.__encode_password(self._password),
+                    "password_transport": "base64",
                 }, "/"], separators=(",", ":"))
 
                 post_cmd = self.__build_curl_command(
@@ -955,6 +965,10 @@ class HDHiveSignIn(_PluginBase):
         if data is not None:
             cmd.extend(["--data-raw", data])
         return cmd
+
+    @staticmethod
+    def __encode_password(password: str) -> str:
+        return base64.b64encode((password or "").encode("utf-8")).decode("ascii")
 
     @staticmethod
     def __read_text_file(path: str) -> str:
@@ -1268,7 +1282,12 @@ class HDHiveSignIn(_PluginBase):
 
     @staticmethod
     def __extract_chunk_paths(html: str) -> List[str]:
-        return sorted(set(re.findall(r'/_next/static/chunks/[^"\s]+\.js', html or "")))
+        paths = set()
+        for match in re.findall(r'/_next/static/chunks/[^"\\\s]+\.js', html or ""):
+            paths.add(match)
+        for match in re.findall(r'(?<!/_next/)static/chunks/[^"\\\s]+\.js', html or ""):
+            paths.add("/_next/" + match.lstrip("/"))
+        return sorted(paths, key=lambda path: (0 if "/chunks/app/" in path else 1, path))
 
     @staticmethod
     def __extract_hex_candidates(text: str, excluded: Optional[set] = None) -> List[str]:
@@ -1506,6 +1525,20 @@ class HDHiveSignIn(_PluginBase):
         return False
 
     @staticmethod
+    def __json_error_message(payload: Dict) -> str:
+        code = str(payload.get("code") or "").lower()
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        if code == "action_token_required" or code == "400401" or data.get("challenge_ticket"):
+            return "签到失败，HDHive 需要浏览器验证码/Action Token"
+        if code in ["401", "unauthorized", "token_expired"]:
+            return "签到失败，Cookie已失效"
+        message = payload.get("message") or payload.get("description")
+        if code or message:
+            detail = " / ".join(str(item) for item in [code, message] if item)
+            return f"接口返回错误：{detail}"
+        return ""
+
+    @staticmethod
     def __looks_like_rsc_flight(text: str) -> bool:
         normalized = (text or "").strip()
         if not normalized:
@@ -1525,6 +1558,9 @@ class HDHiveSignIn(_PluginBase):
 
             for item in self.__server_action_payloads(payload):
                 merged = " ".join(self.__flatten_string_values(item))
+                if self.__looks_like_action_token_message(item, merged):
+                    logger.warning("HDHive 签到需要浏览器验证码/Action Token")
+                    return False, "签到失败，HDHive 需要浏览器验证码/Action Token"
                 if self.__looks_like_repeat_message(merged):
                     logger.info("HDHive 今日已签到")
                     return True, "今日已签到"
@@ -1545,6 +1581,16 @@ class HDHiveSignIn(_PluginBase):
                 if isinstance(value, (dict, list)):
                     payloads.append(value)
         return payloads
+
+    @staticmethod
+    def __looks_like_action_token_message(item: Any, text: str) -> bool:
+        if isinstance(item, dict):
+            code = str(item.get("code") or "").lower()
+            data = item.get("data") if isinstance(item.get("data"), dict) else {}
+            if code == "action_token_required" or code == "400401" or data.get("challenge_ticket"):
+                return True
+        lowered = (text or "").lower()
+        return "action_token_required" in lowered or "challenge_ticket" in lowered
 
     @classmethod
     def __flatten_string_values(cls, value: Any) -> List[str]:
