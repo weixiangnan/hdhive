@@ -26,7 +26,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.33.1"
+    plugin_version = "1.33.2"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -670,8 +670,10 @@ class HDHiveSignIn(_PluginBase):
                 self.__parse_sign_body(),
                 self.__request_headers(),
             ))
+        custom_headers = self.__request_headers()
+        if custom_headers.get("next-action"):
+            candidates.append(("post", f"{site_url}tv", [False], custom_headers))
         candidates.extend([
-            ("post", f"{site_url}tv", [False], self.__request_headers()),
             ("post", f"{site_url}signin.php", {"action": "post", "content": ""}, self.__request_headers()),
             ("post", f"{site_url}sign_in.php", {"action": "sign_in"}, self.__request_headers()),
             ("get", f"{site_url}attendance.php", None, self.__request_headers()),
@@ -761,6 +763,8 @@ class HDHiveSignIn(_PluginBase):
             if self.__looks_like_rsc_flight(text):
                 logger.info(f"HDHive 命中新版 Server Action 响应，接口：{url}")
                 return False, self._valid_server_action_marker
+            if (headers or {}).get("next-action") and self.__looks_like_html_page(text):
+                return False, f"接口 {url} 返回页面 HTML，Server Action 请求头未生效或站点要求浏览器校验"
             snippet = re.sub(r"\s+", " ", text)[:200]
             return False, f"接口 {url} 返回：{snippet}"
         except Exception as err:
@@ -1104,6 +1108,11 @@ class HDHiveSignIn(_PluginBase):
         return "签到失败，HDHive 系统维护中"
 
     @staticmethod
+    def __looks_like_html_page(text: str) -> bool:
+        page = (text or "").lstrip().lower()
+        return page.startswith("<!doctype html") or page.startswith("<html")
+
+    @staticmethod
     def __is_logged_in_page(text: str) -> bool:
         page = text or ""
         if re.search(r'"currentUser"\s*:\s*\{', page):
@@ -1203,14 +1212,15 @@ class HDHiveSignIn(_PluginBase):
         candidates: List[Tuple[str, str]] = []
         cached_actions = self.__load_cached_server_actions()
         cached_action = cached_actions.get(page_name or "/")
-        if cached_action:
-            candidates.append(("缓存复用", cached_action))
 
         action_id = self.__extract_server_action_id(html, site_url, action_name=action_name)
         if action_id:
             self.__save_cached_server_action(page_name, action_id)
             candidates.append(("动态提取", action_id))
             return candidates
+
+        if cached_action:
+            candidates.append(("缓存复用", cached_action))
 
         probed_action = self.__probe_server_action_id(
             html=html,
