@@ -26,7 +26,7 @@ class HDHiveSignIn(_PluginBase):
     plugin_name = "HDHive 自动签到"
     plugin_desc = "独立执行 HDHive 站点签到。"
     plugin_icon = "signin.png"
-    plugin_version = "1.33.2"
+    plugin_version = "1.33.3"
     plugin_author = "weixiangnan"
     author_url = "https://github.com/weixiangnan"
     plugin_config_prefix = "hdhivesignin_"
@@ -70,6 +70,7 @@ class HDHiveSignIn(_PluginBase):
         r"\"success\":true",
     ]
     _default_sign_pages = ["", "tv"]
+    _checkin_action_body = [False, "$undefined"]
     _cached_action_data_key = "cached_server_actions"
     _valid_server_action_marker = "__HDHIVE_VALID_SERVER_ACTION__"
     _observed_server_actions = {
@@ -672,7 +673,7 @@ class HDHiveSignIn(_PluginBase):
             ))
         custom_headers = self.__request_headers()
         if custom_headers.get("next-action"):
-            candidates.append(("post", f"{site_url}tv", [False], custom_headers))
+            candidates.append(("post", f"{site_url}tv", self._checkin_action_body, custom_headers))
         candidates.extend([
             ("post", f"{site_url}signin.php", {"action": "post", "content": ""}, self.__request_headers()),
             ("post", f"{site_url}sign_in.php", {"action": "sign_in"}, self.__request_headers()),
@@ -710,22 +711,14 @@ class HDHiveSignIn(_PluginBase):
 
     def __try_sign(self, url: str, method: str, data: Any, headers: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
         try:
-            req = RequestUtils(
-                cookies=self._cookie,
-                ua=self._ua,
+            res = self.__request_sign_response(
+                url=url,
+                method=method,
+                data=data,
                 headers=headers or {},
-                proxies=settings.PROXY if self._proxy else None,
-                timeout=self._timeout,
             )
-            if method == "post":
-                if isinstance(data, list):
-                    res = req.post_res(url=url, data=json.dumps(data))
-                else:
-                    res = req.post_res(url=url, data=data)
-            else:
-                res = req.get_res(url=url)
 
-            if not res:
+            if res is None:
                 return False, ""
 
             text = (res.text or "").strip()
@@ -770,6 +763,34 @@ class HDHiveSignIn(_PluginBase):
         except Exception as err:
             logger.error(f"HDHive 请求签到接口异常：{url}，原因：{str(err)}")
             return False, str(err)
+
+    def __request_sign_response(
+        self,
+        url: str,
+        method: str,
+        data: Any,
+        headers: Dict[str, str],
+    ) -> Optional[requests.Response]:
+        request_headers = dict(headers or {})
+        request_headers.setdefault("User-Agent", self._ua)
+        request_headers.setdefault("Accept-Language", "zh-CN,zh;q=0.9")
+        if self._cookie and "Cookie" not in request_headers:
+            request_headers["Cookie"] = self._cookie
+
+        body = data
+        if method == "post" and isinstance(data, list):
+            body = json.dumps(data, separators=(",", ":"))
+
+        proxies = settings.PROXY if self._proxy else None
+        return requests.request(
+            method=method.upper(),
+            url=url,
+            data=body if method == "post" else None,
+            headers=request_headers,
+            proxies=proxies,
+            timeout=self._timeout,
+            allow_redirects=True,
+        )
 
     def __ensure_cookie(self, site_url: str) -> Tuple[str, str]:
         if self._cookie:
@@ -1196,7 +1217,7 @@ class HDHiveSignIn(_PluginBase):
                 logger.info(
                     f"HDHive 已{source} {page_url} 的 checkIn action: {action_id[:12]}..."
                 )
-                candidates.append(("post", page_url, [False], dynamic_headers))
+                candidates.append(("post", page_url, self._checkin_action_body, dynamic_headers))
 
         if not candidates:
             logger.warning("HDHive 动态提取 checkIn action 失败，将回退到静态候选接口")
@@ -1272,7 +1293,7 @@ class HDHiveSignIn(_PluginBase):
             ok, message = self.__try_sign(
                 url=page_url,
                 method="post",
-                data=[False],
+                data=self._checkin_action_body,
                 headers=headers,
             )
             if ok:
@@ -1538,7 +1559,7 @@ class HDHiveSignIn(_PluginBase):
     def __json_error_message(payload: Dict) -> str:
         code = str(payload.get("code") or "").lower()
         data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        if code == "action_token_required" or code == "400401" or data.get("challenge_ticket"):
+        if code.startswith("action_token_") or code == "400401" or data.get("challenge_ticket"):
             return "签到失败，HDHive 需要浏览器验证码/Action Token"
         if code in ["401", "unauthorized", "token_expired"]:
             return "签到失败，Cookie已失效"
@@ -1597,10 +1618,10 @@ class HDHiveSignIn(_PluginBase):
         if isinstance(item, dict):
             code = str(item.get("code") or "").lower()
             data = item.get("data") if isinstance(item.get("data"), dict) else {}
-            if code == "action_token_required" or code == "400401" or data.get("challenge_ticket"):
+            if code.startswith("action_token_") or code == "400401" or data.get("challenge_ticket"):
                 return True
         lowered = (text or "").lower()
-        return "action_token_required" in lowered or "challenge_ticket" in lowered
+        return "action_token_" in lowered or "challenge_ticket" in lowered
 
     @classmethod
     def __flatten_string_values(cls, value: Any) -> List[str]:
